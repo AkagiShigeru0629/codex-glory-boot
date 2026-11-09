@@ -14,6 +14,7 @@ a = Analysis(
         (str(project_root / "config" / "launcher.example.json"), "config"),
         (str(project_root / "media" / "startup.mp4"), "media"),
         (str(project_root / "media" / "poster.png"), "media"),
+        (str(project_root / "media" / "wallpaper.jpg"), "media"),
         (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
         *[
             (str(resource), "glory_boot/resources")

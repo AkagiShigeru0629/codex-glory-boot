@@ -1,9 +1,23 @@
 html[data-glory-boot-skin="active"] {
     background-color: #0b0d12 !important;
+    --color-text: #eef2f8 !important;
+    --color-text-secondary: #cbd5e1 !important;
+    --color-text-tertiary: #a8b3c2 !important;
+    --color-surface: transparent !important;
+    --color-surface-secondary: rgb(9 12 18 / 0.72) !important;
+    --color-surface-tertiary: rgb(9 12 18 / 0.62) !important;
+    --app-color-background-surface: transparent !important;
+    --app-color-background-surface-under: transparent !important;
+    --color-token-main-surface-primary: transparent !important;
+    --color-token-side-bar-background: transparent !important;
+    --app-shell-panel-background: transparent !important;
+    --chat-background-color: transparent !important;
+    color-scheme: dark;
 }
 
 html[data-glory-boot-skin="active"] body {
     background-color: #0b0d12 !important;
+    color: #eef2f8 !important;
     background-image:
         linear-gradient(
             rgb(9 12 18 / var(--glory-boot-wash, 0.72)),
@@ -20,13 +34,45 @@ html[data-glory-boot-skin="active"]
     :is(
         #root,
         [data-app-shell-frame],
-        [data-app-shell-page-surface="true"]
+        [data-app-shell-page-surface="true"],
+        main.bg-surface,
+        webview.bg-surface,
+        [class*="MainContentSurface-"]
     ) {
     background-color: transparent !important;
 }
 
 html[data-glory-boot-skin="active"] .app-shell-left-panel {
     background-color: rgb(9 12 18 / 0.22) !important;
+    color: #eef2f8 !important;
+}
+
+html[data-glory-boot-skin="active"]
+    [class*="ConversationSidebar-"] {
+    background-color: rgb(9 12 18 / 0.52) !important;
+    color: #eef2f8 !important;
+}
+
+html[data-glory-boot-skin="active"]
+    :is(
+        main,
+        aside,
+        .bg-surface,
+        .bg-surface-elevated-secondary
+    ) {
+    color: #eef2f8 !important;
+}
+
+html[data-glory-boot-skin="active"]
+    .bg-surface-elevated-secondary {
+    background-color: rgb(9 12 18 / 0.72) !important;
+}
+
+html[data-glory-boot-skin="active"]
+    [class*="ComposerLayoutRoot-"] {
+    background-color: rgb(9 12 18 / 0.84) !important;
+    border-color: rgb(180 197 219 / 0.22) !important;
+    color: #eef2f8 !important;
 }
 
 html[data-glory-boot-skin="active"]
@@ -41,4 +87,5 @@ html[data-glory-boot-skin="active"]
         code
     ) {
     background-color: rgb(14 17 24 / 0.94) !important;
+    color: #eef2f8 !important;
 }

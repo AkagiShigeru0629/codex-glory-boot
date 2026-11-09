@@ -1,3 +1,13 @@
 {
-  "profiles": []
+  "profiles": [
+    {
+      "package_version": "26.1103.4239.0",
+      "required_selectors": [
+        "#root"
+      ],
+      "required_tokens": [
+        "--color-surface"
+      ]
+    }
+  ]
 }

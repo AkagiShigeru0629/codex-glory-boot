@@ -84,6 +84,7 @@ def test_skin_resources_are_packaged_with_qt_websockets() -> None:
     resource_root = ROOT / "src" / "glory_boot" / "resources"
     for name in ("skin.css", "skin.js", "skin_profiles.json"):
         assert (resource_root / name).is_file(), f"缺少皮肤资源: {name}"
+    assert (ROOT / "media" / "wallpaper.jpg").is_file()
 
     pyproject = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -98,4 +99,5 @@ def test_skin_resources_are_packaged_with_qt_websockets() -> None:
     )
     assert '"PySide6.QtWebSockets"' in spec_text
     assert '"glory_boot/resources"' in spec_text
+    assert '"wallpaper.jpg"' in spec_text
     assert not (ROOT / "package.json").exists()

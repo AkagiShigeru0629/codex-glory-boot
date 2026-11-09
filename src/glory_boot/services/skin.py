@@ -17,6 +17,7 @@ from glory_boot.adapters.win32 import (
 from glory_boot.domain.models import SkinConfig
 from glory_boot.domain.skin import (
     SkinProfile,
+    package_identity_from_path,
     package_version_from_path,
     select_skin_profile,
 )
@@ -77,8 +78,14 @@ def _capability_expression(profile: SkinProfile) -> str:
 
 def _value_from_result(result: object) -> object:
     current = result
-    while isinstance(current, dict) and "value" in current:
-        current = current["value"]
+    while isinstance(current, dict):
+        if "result" in current:
+            current = current["result"]
+            continue
+        if "value" in current:
+            current = current["value"]
+            continue
+        break
     return current
 
 
@@ -98,6 +105,8 @@ class SkinController(QObject):
     INSTALL_REQUEST = 2
     DETECT_REQUEST = 3
     RESTORE_REQUEST = 4
+    MONITOR_REQUEST = 5
+    CAPABILITY_RETRY_LIMIT = 5
 
     def __init__(
         self,
@@ -113,13 +122,14 @@ class SkinController(QObject):
         cdp_factory: Callable[[], CdpSession] | None = None,
         stage_marker: Callable[[str], object] | None = None,
         interval_ms: int = 250,
+        monitor_interval_ms: int = 1000,
         timeout_ms: int = 15_000,
         connect_timeout_ms: int = 3000,
         evaluate_timeout_ms: int = 3000,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        if interval_ms <= 0 or timeout_ms <= 0:
+        if interval_ms <= 0 or monitor_interval_ms <= 0 or timeout_ms <= 0:
             raise ValueError("皮肤等待时间必须为正数")
         if connect_timeout_ms <= 0 or evaluate_timeout_ms <= 0:
             raise ValueError("皮肤连接超时必须是正数")
@@ -146,19 +156,26 @@ class SkinController(QObject):
         self._started = False
         self._closed = False
         self._launched_pid: int | None = None
+        self._launched_package: str | None = None
+        self._launched_version: str | None = None
         self._deadline = 0.0
         self._worker: ThreadPoolExecutor | None = None
         self._future: Future[_DiscoveryResult] | None = None
         self._cdp: CdpSession | None = None
         self._connected = False
+        self._capability_attempts = 0
         self._phase = ""
         self._page: DevToolsPage | None = None
         self._profile: SkinProfile | None = None
         self._payload: SkinPayload | None = None
         self._restore_after_failure = False
+        self._health_check_pending = False
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(interval_ms)
         self._poll_timer.timeout.connect(self._poll)
+        self._monitor_timer = QTimer(self)
+        self._monitor_timer.setInterval(monitor_interval_ms)
+        self._monitor_timer.timeout.connect(self._check_installed_skin)
 
     @property
     def state(self) -> SkinState:
@@ -179,6 +196,20 @@ class SkinController(QObject):
             return
 
         self._launched_pid = launched_pid
+        try:
+            process_path = self._process_path(launched_pid)
+        except OSError:
+            process_path = None
+        self._launched_version = package_version_from_path(process_path or "")
+        self._launched_package = package_identity_from_path(process_path or "")
+        profile = select_skin_profile(
+            self._profiles,
+            self._launched_version,
+        )
+        if profile is None or self._launched_package is None:
+            self._finish(SkinState.SKIPPED, "skin_skipped_version")
+            return
+        self._profile = profile
         self._deadline = time.monotonic() + self._timeout_seconds
         self._worker = ThreadPoolExecutor(
             max_workers=1,
@@ -193,6 +224,7 @@ class SkinController(QObject):
             return
         if self._payload is None:
             return
+        self._monitor_timer.stop()
         self._phase = "restore"
         self._restore_after_failure = False
         self._cdp.evaluate(
@@ -206,6 +238,7 @@ class SkinController(QObject):
             return
         self._closed = True
         self._poll_timer.stop()
+        self._monitor_timer.stop()
         self._close_cdp()
         worker = self._worker
         self._worker = None
@@ -256,6 +289,12 @@ class SkinController(QObject):
         self._page = result.page
         self._profile = result.profile
         self._payload = result.payload
+        self._poll_timer.stop()
+        worker = self._worker
+        self._worker = None
+        self._future = None
+        if worker is not None:
+            worker.shutdown(wait=False, cancel_futures=True)
         self._connect_cdp()
 
     def _discover(self) -> _DiscoveryResult:
@@ -269,16 +308,17 @@ class SkinController(QObject):
         if owner is None:
             return _DiscoveryResult("waiting")
         if owner != pid:
-            return _DiscoveryResult("skipped", reason="owner")
-
-        try:
-            process_path = self._process_path(pid)
-        except OSError:
-            return _DiscoveryResult("skipped", reason="process")
-        version = package_version_from_path(process_path or "")
-        profile = select_skin_profile(self._profiles, version)
-        if profile is None:
-            return _DiscoveryResult("skipped", reason="version")
+            try:
+                owner_path = self._process_path(owner)
+            except OSError:
+                return _DiscoveryResult("skipped", reason="owner")
+            if (
+                package_identity_from_path(owner_path or "")
+                != self._launched_package
+                or package_version_from_path(owner_path or "")
+                != self._launched_version
+            ):
+                return _DiscoveryResult("skipped", reason="owner")
 
         try:
             pages = self._page_finder(self._port)
@@ -301,7 +341,7 @@ class SkinController(QObject):
         return _DiscoveryResult(
             "ready",
             page=pages[0],
-            profile=profile,
+            profile=self._profile,
             payload=payload,
         )
 
@@ -329,6 +369,17 @@ class SkinController(QObject):
         ):
             return
         self._connected = True
+        self._capability_attempts = 0
+        self._evaluate_capability()
+
+    def _evaluate_capability(self) -> None:
+        if (
+            self._closed
+            or not self._connected
+            or self._cdp is None
+            or self._profile is None
+        ):
+            return
         self._cdp.evaluate(
             _capability_expression(self._profile),
             self.CAPABILITY_REQUEST,
@@ -340,7 +391,17 @@ class SkinController(QObject):
             return
         if request_id == self.CAPABILITY_REQUEST:
             if _value_from_result(result) is not True:
-                self._finish(SkinState.SKIPPED, "skin_skipped_capability")
+                self._capability_attempts += 1
+                if self._capability_attempts < self.CAPABILITY_RETRY_LIMIT:
+                    QTimer.singleShot(
+                        self._poll_timer.interval(),
+                        self._evaluate_capability,
+                    )
+                else:
+                    self._finish(
+                        SkinState.SKIPPED,
+                        "skin_skipped_capability",
+                    )
                 return
             if self._cdp is None or self._payload is None:
                 self._finish(SkinState.FAILED, "skin_payload_missing")
@@ -370,9 +431,28 @@ class SkinController(QObject):
 
         if request_id == self.DETECT_REQUEST:
             if _value_from_result(result) is True:
-                self._finish(SkinState.INSTALLED, "skin_installed")
+                self._activate_installed(
+                    "skin_reinstalled"
+                    if self._state is SkinState.INSTALLED
+                    else "skin_installed"
+                )
             else:
                 self._restore_then_fail("skin_detection_failed")
+            return
+
+        if request_id == self.MONITOR_REQUEST:
+            if _value_from_result(result) is True:
+                self._health_check_pending = False
+                return
+            if self._cdp is None or self._payload is None:
+                self._finish(SkinState.FAILED, "skin_payload_missing")
+                return
+            self._phase = "install"
+            self._cdp.evaluate(
+                self._payload.install_expression,
+                self.INSTALL_REQUEST,
+                self._evaluate_timeout_ms,
+            )
             return
 
         if request_id == self.RESTORE_REQUEST:
@@ -406,12 +486,38 @@ class SkinController(QObject):
             self._evaluate_timeout_ms,
         )
 
+    def _activate_installed(self, marker: str) -> None:
+        self._set_state(SkinState.INSTALLED)
+        self._mark(marker)
+        self._poll_timer.stop()
+        self._phase = "installed"
+        self._health_check_pending = False
+        self._monitor_timer.start()
+
+    def _check_installed_skin(self) -> None:
+        if (
+            self._closed
+            or self._state is not SkinState.INSTALLED
+            or self._cdp is None
+            or self._payload is None
+            or self._health_check_pending
+        ):
+            return
+        self._health_check_pending = True
+        self._phase = "monitor"
+        self._cdp.evaluate(
+            self._payload.detect_expression,
+            self.MONITOR_REQUEST,
+            self._evaluate_timeout_ms,
+        )
+
     def _finish(self, state: SkinState, marker: str) -> None:
         if self._closed:
             return
         self._set_state(state)
         self._mark(marker)
         self._poll_timer.stop()
+        self._monitor_timer.stop()
         self._close_cdp()
         worker = self._worker
         self._worker = None

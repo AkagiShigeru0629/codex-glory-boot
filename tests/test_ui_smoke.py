@@ -12,6 +12,7 @@ from glory_boot.domain.skin import SkinProfile
 from glory_boot.services.codex_launcher import LaunchResult
 from glory_boot.ui.application import (
     LauncherApplication,
+    REVEAL_FALLBACK_MS,
     SkinLaunchOptions,
     build_process_backend,
     build_skin_controller,
@@ -77,6 +78,10 @@ def test_cli_disable_skin_overrides_enabled_config() -> None:
 
     assert options == SkinLaunchOptions(False, None, "")
     assert calls == []
+
+
+def test_reveal_fallback_allows_slow_codex_window_startup() -> None:
+    assert REVEAL_FALLBACK_MS >= 10_000
 
 
 def test_enabled_skin_allocates_one_loopback_port(
@@ -425,26 +430,27 @@ class StopTimer:
         self.calls.append("stop_timer")
 
 
-def test_present_initial_window_places_before_showing(qapp) -> None:
+def test_present_initial_window_reapplies_rect_after_showing(qapp) -> None:
     window = PresentationWindow()
     application = PresentationApplication()
     application.calls = window.calls
     timer = PresentationTimer()
     timer.calls = window.calls
-    placed: list[tuple[int, Rect]] = []
 
     present_initial_window(
         window=window,
         placement=Placement(),
-        place_window=lambda hwnd, rect: placed.append((hwnd, rect)),
+        place_window=lambda hwnd, rect: window.calls.append(
+            f"place:{hwnd}:{rect.x},{rect.y},{rect.width},{rect.height}"
+        ),
         qt_app=application,
         timer=timer,
     )
 
-    assert placed == [(900, Rect(-1200, 40, 1400, 820))]
     assert window.calls == [
-        "winId",
         "show",
+        "winId",
+        "place:900:-1200,40,1400,820",
         "processEvents",
         "mark:window_visible",
     ]
@@ -487,7 +493,7 @@ def test_existing_codex_is_focused_before_launcher_is_shown(
     assert "show" not in application.window.calls
 
 
-def test_reveal_places_target_before_showing_and_starting_media(
+def test_reveal_locks_target_before_first_events_and_starting_media(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[str] = []
@@ -512,7 +518,8 @@ def test_reveal_places_target_before_showing_and_starting_media(
 
     application._reveal_window()
 
-    assert calls.index("place") < calls.index("show")
-    assert calls.index("show") < calls.index("attach_media")
+    assert calls.index("show") < calls.index("place")
+    assert calls.index("place") < calls.index("processEvents")
+    assert calls.index("processEvents") < calls.index("attach_media")
     assert calls.index("attach_media") < calls.index("begin_media")
     assert application._window_visible is True

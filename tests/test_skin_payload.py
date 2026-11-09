@@ -74,3 +74,15 @@ def test_payload_does_not_redesign_controls() -> None:
         assert forbidden not in stylesheet
     assert re.search(r"^\s*display\s*:", stylesheet, re.MULTILINE) is None
     assert re.search(r"^\s*position\s*:", stylesheet, re.MULTILINE) is None
+
+
+def test_stylesheet_covers_current_version_content_surfaces() -> None:
+    stylesheet = (
+        ROOT / "src" / "glory_boot" / "resources" / "skin.css"
+    ).read_text(encoding="utf-8")
+
+    assert "--color-surface: transparent" in stylesheet
+    assert "main.bg-surface" in stylesheet
+    assert '[class*="MainContentSurface-"]' in stylesheet
+    assert '[class*="ConversationSidebar-"]' in stylesheet
+    assert '[class*="ComposerLayoutRoot-"]' in stylesheet

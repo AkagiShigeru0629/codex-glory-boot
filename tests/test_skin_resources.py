@@ -76,8 +76,14 @@ def test_parse_skin_profiles_rejects_invalid_shapes(payload: object) -> None:
         parse_skin_profiles(payload)
 
 
-def test_bundled_profile_file_is_safe_by_default() -> None:
-    assert load_skin_profiles() == ()
+def test_bundled_profile_registers_verified_candidate_version() -> None:
+    assert load_skin_profiles() == (
+        SkinProfile(
+            "26.1103.4239.0",
+            ("#root",),
+            ("--color-surface",),
+        ),
+    )
 
 
 def test_runtime_store_round_trip_checks_executable_exists(

@@ -40,6 +40,9 @@ from glory_boot.services.window_placement import WindowPlacementController
 from glory_boot.ui.boot_window import BootWindow
 
 
+REVEAL_FALLBACK_MS = 12_000
+
+
 class WindowPresenter(Protocol):
     def winId(self) -> int:
         ...
@@ -153,14 +156,15 @@ def present_initial_window(
     qt_app: QtEventProcessor,
     timer: StageMarker,
 ) -> None:
-    """先放置原生窗口，再显示海报，避免先出现错误尺寸。"""
+    """显示窗口后立即锁定原生矩形，再处理首帧绘制。"""
     try:
         rect = placement.initial_viewport()
+        window.show()
         place_window(int(window.winId()), rect)
     except (OSError, RuntimeError, ValueError):
         timer.mark("window_placement_failed")
 
-    window.show()
+        window.show()
     qt_app.processEvents()
     timer.mark("window_visible")
 
@@ -351,7 +355,7 @@ class LauncherApplication:
                 self.session.start()
             else:
                 self.session.start(defer_media=True)
-                self._reveal_timer.start(5000)
+                self._reveal_timer.start(REVEAL_FALLBACK_MS)
             if benchmark:
                 QTimer.singleShot(1500, self._qt_app.quit)
             try:

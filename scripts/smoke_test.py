@@ -81,6 +81,7 @@ def check_package() -> None:
     required_suffixes = {
         ("media", "startup.mp4"),
         ("media", "poster.png"),
+        ("media", "wallpaper.jpg"),
         ("config", "launcher.example.json"),
         ("_internal", "glory_boot", "resources", "skin.css"),
         ("_internal", "glory_boot", "resources", "skin.js"),

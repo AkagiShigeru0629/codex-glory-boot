@@ -25,6 +25,14 @@ def package_version_from_path(process_path: str) -> str | None:
     return None
 
 
+def package_identity_from_path(process_path: str) -> str | None:
+    """提取 Store 包目录名，用于验证同一次应用启动的进程组。"""
+    for part in PureWindowsPath(process_path).parts:
+        if _PACKAGE_VERSION.match(part):
+            return part.casefold()
+    return None
+
+
 def select_skin_profile(
     profiles: tuple[SkinProfile, ...],
     version: str | None,

@@ -13,6 +13,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 foreach ($Required in @(
     "media\startup.mp4",
     "media\poster.png",
+    "media\wallpaper.jpg",
     "config\launcher.example.json"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $Required))) {
@@ -37,6 +38,8 @@ try {
     Copy-Item -LiteralPath "media\startup.mp4" `
         -Destination $MediaOutput -Force
     Copy-Item -LiteralPath "media\poster.png" `
+        -Destination $MediaOutput -Force
+    Copy-Item -LiteralPath "media\wallpaper.jpg" `
         -Destination $MediaOutput -Force
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" `
         -Destination $OutputRoot -Force

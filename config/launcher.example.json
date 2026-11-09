@@ -14,8 +14,8 @@
   "max_wait_seconds": 60.0,
   "volume": 0.35,
   "skin": {
-    "enabled": false,
-    "wallpaper_path": null
+    "enabled": true,
+    "wallpaper_path": "media/wallpaper.jpg"
   },
   "screen_frames": [
     {
