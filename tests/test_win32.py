@@ -2,11 +2,15 @@ from dataclasses import replace
 
 import pytest
 
+import glory_boot.adapters.win32 as win32
 from glory_boot.adapters.dwm import DwmController
 from glory_boot.adapters.win32 import (
     RawWindowRecord,
     WindowInfo,
+    Win32Error,
+    client_screen_rect,
     select_codex_window,
+    set_window_rect,
 )
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
 
@@ -108,6 +112,66 @@ def test_select_codex_window_rejects_multiple_matches(
         config,
         [_valid_record(), duplicate],
     ) is None
+
+
+class FakeUser32:
+    def __init__(self) -> None:
+        self.position: tuple[int, int, int, int] | None = None
+
+    def GetClientRect(self, hwnd: int, pointer: object) -> int:
+        assert hwnd == 1001
+        rect = pointer._obj  # type: ignore[attr-defined]
+        rect.left = 0
+        rect.top = 0
+        rect.right = 800
+        rect.bottom = 600
+        return 1
+
+    def ClientToScreen(self, hwnd: int, pointer: object) -> int:
+        assert hwnd == 1001
+        point = pointer._obj  # type: ignore[attr-defined]
+        point.x += 150
+        point.y += 80
+        return 1
+
+    def SetWindowPos(
+        self,
+        hwnd: int,
+        insert_after: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        flags: int,
+    ) -> int:
+        self.position = (x, y, width, height)
+        return 1
+
+
+def test_client_screen_rect_converts_client_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win32, "_user32", FakeUser32())
+
+    assert client_screen_rect(1001) == Rect(150, 80, 800, 600)
+
+
+def test_set_window_rect_uses_physical_rectangle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = FakeUser32()
+    monkeypatch.setattr(win32, "_user32", user32)
+
+    set_window_rect(1001, Rect(150.4, 80.6, 800.2, 600.5))
+
+    assert user32.position == (150, 81, 800, 600)
+
+
+def test_window_geometry_rejects_invalid_inputs() -> None:
+    with pytest.raises(Win32Error):
+        client_screen_rect(0)
+    with pytest.raises(ValueError):
+        set_window_rect(1001, Rect(0, 0, 0, 100))
 
 
 class FakeDwmBackend:

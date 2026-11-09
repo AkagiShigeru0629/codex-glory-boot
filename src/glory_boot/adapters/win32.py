@@ -1,4 +1,5 @@
 import ctypes
+import math
 from collections.abc import Iterable
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WM_NULL = 0x0000
 SMTO_ABORTIFHUNG = 0x0002
 SW_RESTORE = 9
+HWND_TOPMOST = -1
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
 MIN_CLIENT_WIDTH = 450
 MIN_CLIENT_HEIGHT = 280
 CODEX_WINDOW_CLASS = "Chrome_WidgetWin_1"
@@ -54,6 +58,13 @@ class RECT(ctypes.Structure):
     ]
 
 
+class POINT(ctypes.Structure):
+    _fields_ = [
+        ("x", wintypes.LONG),
+        ("y", wintypes.LONG),
+    ]
+
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
@@ -81,6 +92,8 @@ _user32.GetWindowThreadProcessId.argtypes = [
 _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 _user32.GetClientRect.restype = wintypes.BOOL
+_user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
+_user32.ClientToScreen.restype = wintypes.BOOL
 _user32.SendMessageTimeoutW.argtypes = [
     wintypes.HWND,
     wintypes.UINT,
@@ -95,6 +108,16 @@ _user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 _user32.ShowWindow.restype = wintypes.BOOL
 _user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 _user32.SetForegroundWindow.restype = wintypes.BOOL
+_user32.SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+_user32.SetWindowPos.restype = wintypes.BOOL
 
 _get_window_long = getattr(
     _user32,
@@ -172,6 +195,48 @@ def focus_window(hwnd: int) -> None:
     _user32.ShowWindow(hwnd, SW_RESTORE)
     if not _user32.SetForegroundWindow(hwnd):
         raise Win32Error("无法把 Codex 主窗口切换到前台")
+
+
+def client_screen_rect(hwnd: int) -> Rect:
+    """读取窗口客户区的物理屏幕矩形。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+
+    client = RECT()
+    if not _user32.GetClientRect(hwnd, ctypes.byref(client)):
+        raise Win32Error("无法读取目标窗口客户区")
+    origin = POINT(client.left, client.top)
+    if not _user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        raise Win32Error("无法把客户区原点转换为屏幕坐标")
+    return Rect(
+        x=origin.x,
+        y=origin.y,
+        width=client.right - client.left,
+        height=client.bottom - client.top,
+    )
+
+
+def set_window_rect(hwnd: int, rect: Rect) -> None:
+    """使用物理像素移动无边框启动器窗口。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+    values = (rect.x, rect.y, rect.width, rect.height)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("窗口矩形必须是有限数值")
+    if rect.width <= 0 or rect.height <= 0:
+        raise ValueError("窗口宽高必须为正数")
+
+    result = _user32.SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        int(round(rect.x)),
+        int(round(rect.y)),
+        int(round(rect.width)),
+        int(round(rect.height)),
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    )
+    if not result:
+        raise Win32Error("无法设置启动器窗口矩形")
 
 
 def _is_cloaked(hwnd: int) -> bool:
