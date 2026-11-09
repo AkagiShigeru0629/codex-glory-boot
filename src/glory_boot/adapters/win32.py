@@ -208,6 +208,13 @@ def _process_path(pid: int) -> str:
         _kernel32.CloseHandle(handle)
 
 
+def process_path_for_pid(pid: int) -> str | None:
+    """返回进程完整路径；无权读取或进程不存在时返回 None。"""
+    if pid <= 0:
+        return None
+    return _process_path(pid) or None
+
+
 def is_responsive(hwnd: int) -> bool:
     result = ctypes.c_size_t()
     return bool(

@@ -1,11 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
+import pytest
+from PySide6.QtCore import QProcess
+
 from glory_boot.adapters.win32 import WindowInfo
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
     LaunchResult,
+    QProcessBackend,
 )
 
 
@@ -38,7 +42,7 @@ class FakeProcessBackend:
         self.release = Event()
         self.release.set()
 
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, arguments: str = "") -> None:
         with self._lock:
             self.calls.append(app_id)
         self.launch_started.set()
@@ -154,3 +158,50 @@ def test_window_probe_exception_returns_structured_failure() -> None:
 
     assert result.launch_requested is False
     assert result.error == "window enumeration failed"
+
+
+class RecordingBackend:
+    def __init__(self, *, process_id: int) -> None:
+        self.process_id = process_id
+        self.calls: list[tuple[str, str]] = []
+
+    def launch(self, app_id: str, arguments: str = "") -> int:
+        self.calls.append((app_id, arguments))
+        return self.process_id
+
+
+def test_launcher_passes_arguments_and_returns_process_id() -> None:
+    backend = RecordingBackend(process_id=9876)
+    launcher = CodexLauncher(
+        _config(),
+        process_backend=backend,
+        launch_arguments="--remote-debugging-port=50123",
+        window_finder=lambda _config: None,
+    )
+
+    result = launcher.request_once()
+
+    assert backend.calls == [
+        ("OpenAI.Codex_2p2nqsd0c76g0!App", "--remote-debugging-port=50123")
+    ]
+    assert result.launched_pid == 9876
+
+
+def test_shell_backend_rejects_activation_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def start_detached(program: str, arguments: list[str]):
+        calls.append((program, arguments))
+        return True, 1
+
+    monkeypatch.setattr(QProcess, "startDetached", start_detached)
+
+    with pytest.raises(ValueError):
+        QProcessBackend().launch(
+            "OpenAI.Codex_2p2nqsd0c76g0!App",
+            "--remote-debugging-port=50123",
+        )
+
+    assert calls == []

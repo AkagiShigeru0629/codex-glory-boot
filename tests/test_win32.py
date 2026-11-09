@@ -11,6 +11,7 @@ from glory_boot.adapters.win32 import (
     client_screen_rect,
     cursor_work_area,
     monitor_work_areas,
+    process_path_for_pid,
     select_codex_window,
     set_window_rect,
 )
@@ -221,6 +222,7 @@ def test_window_geometry_rejects_invalid_inputs() -> None:
         client_screen_rect(0)
     with pytest.raises(ValueError):
         set_window_rect(1001, Rect(0, 0, 0, 100))
+    assert process_path_for_pid(0) is None
 
 
 class FakeDwmBackend:

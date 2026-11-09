@@ -14,12 +14,14 @@ from glory_boot.domain.models import AppConfig
 
 
 class ProcessBackend(Protocol):
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
         ...
 
 
 class QProcessBackend:
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
+        if arguments:
+            raise ValueError("Windows Shell 后端不能携带激活参数")
         result = QProcess.startDetached(
             "explorer.exe",
             [f"shell:AppsFolder\\{app_id}"],
@@ -27,20 +29,23 @@ class QProcessBackend:
         started = result[0] if isinstance(result, tuple) else bool(result)
         if not started:
             raise OSError("无法把 Codex 启动请求交给 Windows Shell")
+        return None
 
 
 class NoopProcessBackend:
     """只用于无外部副作用的启动基准。"""
 
-    def launch(self, app_id: str) -> None:
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
         if not app_id:
             raise ValueError("app_id 不能为空")
+        return None
 
 
 @dataclass(frozen=True, slots=True)
 class LaunchResult:
     launch_requested: bool
     existing_window_hwnd: int | None = None
+    launched_pid: int | None = None
     error: str | None = None
 
 
@@ -54,10 +59,12 @@ class CodexLauncher:
         *,
         process_backend: ProcessBackend | None = None,
         window_finder: WindowFinder = find_codex_window,
+        launch_arguments: str = "",
     ) -> None:
         self._config = config
         self._process_backend = process_backend or QProcessBackend()
         self._window_finder = window_finder
+        self._launch_arguments = launch_arguments
         self._lock = Lock()
         self._future: Future[LaunchResult] | None = None
 
@@ -93,6 +100,7 @@ class CodexLauncher:
         return LaunchResult(
             launch_requested=False,
             existing_window_hwnd=result.existing_window_hwnd,
+            launched_pid=result.launched_pid,
             error=result.error,
         )
 
@@ -111,10 +119,16 @@ class CodexLauncher:
             )
 
         try:
-            self._process_backend.launch(self._config.app_id)
+            launched_pid = self._process_backend.launch(
+                self._config.app_id,
+                self._launch_arguments,
+            )
         except Exception as exc:
             return LaunchResult(
                 launch_requested=False,
                 error=str(exc) or type(exc).__name__,
             )
-        return LaunchResult(launch_requested=True)
+        return LaunchResult(
+            launch_requested=True,
+            launched_pid=launched_pid,
+        )
