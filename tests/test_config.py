@@ -94,6 +94,8 @@ def test_load_config_accepts_example_and_resolves_media_paths(
     assert config.process_names == ("Codex.exe",)
     assert config.video_path == str((tmp_path / "media/startup.mp4").resolve())
     assert config.poster_path == str((tmp_path / "media/poster.png").resolve())
+    assert config.skin.enabled is False
+    assert config.skin.wallpaper_path is None
     assert config.screen_frames[0] == ScreenFrame(
         time=0.0,
         rect=Rect(x=0.36, y=0.18, width=0.28, height=0.64),
