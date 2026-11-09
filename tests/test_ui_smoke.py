@@ -1,16 +1,30 @@
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
+from glory_boot.domain.skin import SkinProfile
+from glory_boot.services.codex_launcher import LaunchResult
 from glory_boot.ui.application import (
+    LauncherApplication,
     SkinLaunchOptions,
+    build_process_backend,
+    build_skin_controller,
     prepare_skin_launch,
     present_initial_window,
 )
 from glory_boot.ui.boot_window import BootWindow
+
+
+SUPPORTED_VERSION = "26.924.22138.0"
+SKIN_PROFILE = SkinProfile(
+    SUPPORTED_VERSION,
+    ("#root",),
+    ("--color-surface",),
+)
 
 
 def _app_config(
@@ -41,6 +55,12 @@ def _app_config(
     )
 
 
+def _wallpaper(tmp_path: Path) -> Path:
+    path = tmp_path / "wallpaper.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    return path
+
+
 def test_cli_disable_skin_overrides_enabled_config() -> None:
     calls: list[None] = []
     options = prepare_skin_launch(
@@ -57,14 +77,18 @@ def test_cli_disable_skin_overrides_enabled_config() -> None:
     assert calls == []
 
 
-def test_enabled_skin_allocates_one_loopback_port() -> None:
+def test_enabled_skin_allocates_one_loopback_port(
+    tmp_path: Path,
+) -> None:
     options = prepare_skin_launch(
         _app_config(
             skin_enabled=True,
-            wallpaper_path="wallpaper.png",
+            wallpaper_path=str(_wallpaper(tmp_path)),
         ),
         skin_disabled_by_cli=False,
         benchmark=False,
+        codex_version=SUPPORTED_VERSION,
+        skin_profiles=(SKIN_PROFILE,),
         port_allocator=lambda: 50123,
     )
 
@@ -76,6 +100,48 @@ def test_enabled_skin_allocates_one_loopback_port() -> None:
     )
 
 
+def test_enabled_skin_requires_existing_wallpaper(
+    tmp_path: Path,
+) -> None:
+    calls: list[None] = []
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path=str(tmp_path / "missing.png"),
+        ),
+        skin_disabled_by_cli=False,
+        benchmark=False,
+        codex_version=SUPPORTED_VERSION,
+        skin_profiles=(SKIN_PROFILE,),
+        port_allocator=lambda: calls.append(None) or 50123,
+    )
+
+    assert options == SkinLaunchOptions(False, None, "")
+    assert calls == []
+
+
+@pytest.mark.parametrize("codex_version", [None, "99.0.0.0"])
+def test_enabled_skin_requires_supported_codex_version(
+    tmp_path: Path,
+    codex_version: str | None,
+) -> None:
+    calls: list[None] = []
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path=str(_wallpaper(tmp_path)),
+        ),
+        skin_disabled_by_cli=False,
+        benchmark=False,
+        codex_version=codex_version,
+        skin_profiles=(SKIN_PROFILE,),
+        port_allocator=lambda: calls.append(None) or 50123,
+    )
+
+    assert options == SkinLaunchOptions(False, None, "")
+    assert calls == []
+
+
 def test_skin_without_wallpaper_does_not_open_debug_port() -> None:
     options = prepare_skin_launch(
         _app_config(skin_enabled=True, wallpaper_path=None),
@@ -85,6 +151,103 @@ def test_skin_without_wallpaper_does_not_open_debug_port() -> None:
     )
 
     assert options == SkinLaunchOptions(False, None, "")
+
+
+class RecordingProcessBackend:
+    pass
+
+
+def test_process_backend_uses_activation_only_for_enabled_skin() -> None:
+    created: list[str] = []
+
+    backend = build_process_backend(
+        benchmark=False,
+        skin_enabled=True,
+        activation_factory=lambda: created.append("activation")
+        or RecordingProcessBackend(),
+    )
+
+    assert isinstance(backend, RecordingProcessBackend)
+    assert created == ["activation"]
+    assert build_process_backend(
+        benchmark=False,
+        skin_enabled=False,
+    ) is None
+    assert isinstance(
+        build_process_backend(
+            benchmark=True,
+            skin_enabled=True,
+            noop_factory=lambda: RecordingProcessBackend(),
+        ),
+        RecordingProcessBackend,
+    )
+
+
+class FakeSkinController:
+    def __init__(self) -> None:
+        self.starts: list[int | None] = []
+        self.close_calls = 0
+        self.closed = False
+
+    def start(self, launched_pid: int | None) -> None:
+        self.starts.append(launched_pid)
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.close_calls += 1
+
+
+def test_build_skin_controller_uses_launch_port_and_profile(
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+    fake = FakeSkinController()
+
+    controller = build_skin_controller(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path=str(_wallpaper(tmp_path)),
+        ),
+        root=tmp_path,
+        options=SkinLaunchOptions(True, 50123, "args"),
+        profiles=(SKIN_PROFILE,),
+        stage_marker=lambda _name: None,
+        parent=None,
+        factory=lambda **kwargs: calls.append(kwargs) or fake,
+    )
+
+    assert controller is fake
+    assert calls[0]["port"] == 50123
+    assert calls[0]["profiles"] == (SKIN_PROFILE,)
+    assert build_skin_controller(
+        _app_config(skin_enabled=False, wallpaper_path=None),
+        root=tmp_path,
+        options=SkinLaunchOptions(False, None, ""),
+        profiles=(),
+        stage_marker=lambda _name: None,
+        parent=None,
+        factory=lambda **kwargs: pytest.fail("不应创建控制器"),
+    ) is None
+
+
+def test_application_starts_and_closes_skin_from_launch_result() -> None:
+    application = object.__new__(LauncherApplication)
+    fake = FakeSkinController()
+    application.skin = fake  # type: ignore[assignment]
+
+    application._start_skin(
+        LaunchResult(launch_requested=True, launched_pid=9876)
+    )
+    application._start_skin(
+        LaunchResult(launch_requested=False, existing_window_hwnd=4321)
+    )
+    application._close_skin()
+    application._close_skin()
+
+    assert fake.starts == [9876, None]
+    assert fake.close_calls == 1
 
 
 def test_benchmark_never_enables_skin() -> None:

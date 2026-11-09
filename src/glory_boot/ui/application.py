@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
 from glory_boot.adapters.win32 import (
@@ -24,11 +24,12 @@ from glory_boot.diagnostics import SingleInstanceGuard, StageTimer
 from glory_boot.domain.models import AppConfig, Rect
 from glory_boot.domain.placement import default_launcher_rect
 from glory_boot.domain.policy import HandoffReason
-from glory_boot.domain.skin import SkinProfile
+from glory_boot.domain.skin import SkinProfile, select_skin_profile
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
     LaunchResult,
     NoopProcessBackend,
+    ProcessBackend,
 )
 from glory_boot.services.codex_readiness import CodexReadinessProbe
 from glory_boot.services.media import MediaController
@@ -73,14 +74,18 @@ def prepare_skin_launch(
     *,
     skin_disabled_by_cli: bool,
     benchmark: bool,
+    codex_version: str | None = None,
+    skin_profiles: tuple[SkinProfile, ...] = (),
     port_allocator: Callable[[], int] = allocate_loopback_port,
 ) -> SkinLaunchOptions:
     """只在实际启用且存在壁纸时申请一次本机调试端口。"""
     if (
         not config.skin.enabled
         or not config.skin.wallpaper_path
+        or not Path(config.skin.wallpaper_path).is_file()
         or skin_disabled_by_cli
         or benchmark
+        or select_skin_profile(skin_profiles, codex_version) is None
     ):
         return SkinLaunchOptions(False, None, "")
     try:
@@ -96,6 +101,46 @@ def prepare_skin_launch(
             "--remote-debugging-address=127.0.0.1 "
             f"--remote-debugging-port={port}"
         ),
+    )
+
+
+def build_process_backend(
+    *,
+    benchmark: bool,
+    skin_enabled: bool,
+    noop_factory: Callable[[], ProcessBackend] = NoopProcessBackend,
+    activation_factory: Callable[[], ProcessBackend] = (
+        ApplicationActivationBackend
+    ),
+) -> ProcessBackend | None:
+    """按启动模式选择无副作用、调试激活或普通 Shell 后端。"""
+    if benchmark:
+        return noop_factory()
+    if skin_enabled:
+        return activation_factory()
+    return None
+
+
+def build_skin_controller(
+    config: AppConfig,
+    *,
+    root: Path,
+    options: SkinLaunchOptions,
+    profiles: tuple[SkinProfile, ...],
+    stage_marker: Callable[[str], object],
+    parent: QObject | None,
+    factory: Callable[..., SkinController] = SkinController,
+) -> SkinController | None:
+    """仅在皮肤启动参数完整时创建控制器，并复用同一回环端口。"""
+    if not options.skin_enabled or options.skin_port is None:
+        return None
+    return factory(
+        config=config.skin,
+        root=root,
+        port=options.skin_port,
+        profiles=profiles,
+        stage_marker=stage_marker,
+        parent=parent,
     )
 
 
@@ -130,6 +175,7 @@ class LauncherApplication:
         benchmark: bool = False,
         skin_disabled_by_cli: bool = False,
         skin_profiles: tuple[SkinProfile, ...] = (),
+        codex_version: str | None = None,
     ) -> None:
         self._root = root
         self._config = config
@@ -139,6 +185,8 @@ class LauncherApplication:
             config,
             skin_disabled_by_cli=skin_disabled_by_cli,
             benchmark=benchmark,
+            codex_version=codex_version,
+            skin_profiles=skin_profiles,
         )
         self.window = BootWindow()
         self.media = MediaController(self.window)
@@ -155,14 +203,9 @@ class LauncherApplication:
             place_window=set_window_rect,
         )
         self._target_aligned = False
-        process_backend = (
-            NoopProcessBackend()
-            if benchmark
-            else (
-                ApplicationActivationBackend()
-                if self._skin_options.skin_enabled
-                else None
-            )
+        process_backend = build_process_backend(
+            benchmark=benchmark,
+            skin_enabled=self._skin_options.skin_enabled,
         )
         self.launcher = CodexLauncher(
             config,
@@ -199,19 +242,14 @@ class LauncherApplication:
             lambda: self._timer.mark("media_first_frame")
         )
         self._benchmark = benchmark
-        self.skin: SkinController | None = None
-        if (
-            self._skin_options.skin_enabled
-            and self._skin_options.skin_port is not None
-        ):
-            self.skin = SkinController(
-                config.skin,
-                root=root,
-                port=self._skin_options.skin_port,
-                profiles=skin_profiles,
-                stage_marker=timer.mark,
-                parent=self.window,
-            )
+        self.skin = build_skin_controller(
+            config,
+            root=root,
+            options=self._skin_options,
+            profiles=skin_profiles,
+            stage_marker=timer.mark,
+            parent=self.window,
+        )
         self.session.handoff_completed.connect(self._remember_placement)
         self.session.handoff_completed.connect(self._close_skin)
         self.session.launch_result_ready.connect(self._start_skin)
