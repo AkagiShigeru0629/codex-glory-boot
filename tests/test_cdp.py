@@ -144,3 +144,27 @@ def test_close_is_idempotent_and_ignores_late_socket_events(qapp) -> None:
     assert socket.close_calls == 1
     assert client.socket is None
     assert failures == []
+
+
+def test_socket_error_aborts_failed_socket_and_emits_once(qapp) -> None:
+    client, socket = _connected_client(lambda _url: FakeSocket())
+    failures: list[str] = []
+    client.failed.connect(failures.append)
+
+    socket.errorOccurred.emit(object())
+
+    assert socket.close_calls == 1
+    assert client.socket is None
+    assert failures == ["connection_closed"]
+
+
+def test_unexpected_disconnect_aborts_socket_and_emits_once(qapp) -> None:
+    client, socket = _connected_client(lambda _url: FakeSocket())
+    failures: list[str] = []
+    client.failed.connect(failures.append)
+
+    socket.disconnected.emit()
+
+    assert socket.close_calls == 1
+    assert client.socket is None
+    assert failures == ["connection_closed"]

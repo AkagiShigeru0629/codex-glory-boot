@@ -165,6 +165,7 @@ class CdpClient(QObject):
         self._connect_timer.stop()
         for request_id in tuple(self._pending):
             self._finish_request(request_id)
+        socket = self._socket
         self._socket = None
         message = (
             "connection_closed"
@@ -172,6 +173,11 @@ class CdpClient(QObject):
             else "connect_failed"
         )
         self._socket_is_connected = False
+        if socket is not None:
+            try:
+                socket.abort()
+            except (OSError, RuntimeError):
+                pass
         self.failed.emit(message)
 
     def _on_text_message(self, message: str) -> None:
