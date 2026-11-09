@@ -86,9 +86,16 @@ def _skin_controller(
     version: str | None = VERSION,
     cdp: FakeCdp | None = None,
     page_finder=None,
+    payload_calls: list[tuple[Path, str]] | None = None,
     timeout_ms: int = 1000,
 ) -> tuple[SkinController, FakeCdp]:
     cdp_client = cdp or FakeCdp()
+
+    def payload_factory(root: Path, path: str) -> SkinPayload:
+        if payload_calls is not None:
+            payload_calls.append((root, path))
+        return PAYLOAD
+
     process_path = (
         r"C:\Program Files\WindowsApps"
         rf"\OpenAI.Codex_{version}_x64__x\ChatGPT.exe"
@@ -106,7 +113,7 @@ def _skin_controller(
         page_finder=page_finder or (lambda _port: (PAGE,)),
         listener_owner=lambda _port: listener_pid,
         process_path=lambda _pid: process_path,
-        payload_factory=lambda _root, _path: PAYLOAD,
+        payload_factory=payload_factory,
         cdp_factory=lambda: cdp_client,
         interval_ms=5,
         timeout_ms=timeout_ms,
@@ -114,6 +121,23 @@ def _skin_controller(
         evaluate_timeout_ms=20,
     )
     return controller, cdp_client
+
+
+class DetectFailCdp(FakeCdp):
+    def evaluate(
+        self,
+        expression: str,
+        request_id: int,
+        timeout_ms: int = 5000,
+    ) -> None:
+        if request_id == 3:
+            self.evaluation_calls.append((expression, request_id, timeout_ms))
+            QTimer.singleShot(
+                0,
+                lambda: self.failed.emit("evaluation_timeout:3"),
+            )
+            return
+        super().evaluate(expression, request_id, timeout_ms)
 
 
 def _wait_for_state(
@@ -207,6 +231,45 @@ def test_failed_detection_restores_and_reports_failure(
     assert [call[1] for call in cdp.evaluation_calls] == [1, 2, 3, 4]
     assert cdp.evaluation_calls[-1][0] == "restore()"
     assert cdp.close_calls == 1
+    controller.close()
+
+
+def test_detect_transport_failure_restores_installed_wallpaper(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    cdp = DetectFailCdp()
+    controller, _cdp = _skin_controller(tmp_path, cdp=cdp)
+
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.FAILED)
+
+    assert [call[1] for call in cdp.evaluation_calls] == [1, 2, 3, 4]
+    assert cdp.evaluation_calls[-1][0] == "restore()"
+    assert cdp.close_calls == 1
+    controller.close()
+
+
+def test_waiting_for_page_builds_wallpaper_payload_once(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    pages = [(), (), (PAGE,)]
+    payload_calls: list[tuple[Path, str]] = []
+
+    def finder(_port: int):
+        return pages.pop(0) if pages else (PAGE,)
+
+    controller, _cdp = _skin_controller(
+        tmp_path,
+        page_finder=finder,
+        payload_calls=payload_calls,
+    )
+
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    assert len(payload_calls) == 1
     controller.close()
 
 

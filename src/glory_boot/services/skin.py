@@ -280,14 +280,6 @@ class SkinController(QObject):
         if profile is None:
             return _DiscoveryResult("skipped", reason="version")
 
-        wallpaper_path = self._config.wallpaper_path
-        if wallpaper_path is None:
-            return _DiscoveryResult("skipped", reason="wallpaper")
-        try:
-            payload = self._payload_factory(self._root, wallpaper_path)
-        except (OSError, ValueError):
-            return _DiscoveryResult("skipped", reason="wallpaper")
-
         try:
             pages = self._page_finder(self._port)
         except OSError:
@@ -298,6 +290,14 @@ class SkinController(QObject):
             return _DiscoveryResult("waiting")
         if len(pages) != 1:
             return _DiscoveryResult("skipped", reason="ambiguous_page")
+
+        wallpaper_path = self._config.wallpaper_path
+        if wallpaper_path is None:
+            return _DiscoveryResult("skipped", reason="wallpaper")
+        try:
+            payload = self._payload_factory(self._root, wallpaper_path)
+        except (OSError, ValueError):
+            return _DiscoveryResult("skipped", reason="wallpaper")
         return _DiscoveryResult(
             "ready",
             page=pages[0],
@@ -386,6 +386,12 @@ class SkinController(QObject):
             return
         if not reason:
             reason = "unknown"
+        if self._phase in {"install", "detect"}:
+            self._restore_then_fail(f"skin_cdp_{reason}")
+            return
+        if self._phase == "restore":
+            self._finish(SkinState.FAILED, "skin_restore_failed")
+            return
         self._finish(SkinState.FAILED, f"skin_cdp_{reason}")
 
     def _restore_then_fail(self, reason: str) -> None:
