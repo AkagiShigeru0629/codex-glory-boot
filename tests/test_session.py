@@ -187,6 +187,7 @@ def _session(
     exit_callback=None,
     async_window_probe: bool = False,
     launcher_results: list[LaunchResult] | None = None,
+    target_stable_callback: Callable[[WindowInfo], None] | None = None,
 ):
     media = FakeMedia()
     launcher = FakeLauncher(results=launcher_results)
@@ -205,8 +206,24 @@ def _session(
         clock=lambda: now[0],
         schedule_timer=False,
         async_window_probe=async_window_probe,
+        target_stable_callback=target_stable_callback,
     )
     return controller, media, launcher, window, now
+
+
+def test_target_stable_callback_fires_once_per_window() -> None:
+    aligned: list[int] = []
+    controller, _media, launcher, _window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+        target_stable_callback=lambda found: aligned.append(found.hwnd),
+    )
+
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    assert aligned == [4321]
 
 
 def test_session_plays_animation_to_end_before_waiting_for_codex() -> None:

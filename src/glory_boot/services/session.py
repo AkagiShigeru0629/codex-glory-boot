@@ -103,6 +103,7 @@ class SessionController(QObject):
         media: MediaController | SessionMedia,
         window: SessionWindow,
         window_finder: Callable[[AppConfig], WindowInfo | None] = find_codex_window,
+        target_stable_callback: Callable[[WindowInfo], None] | None = None,
         dwm_factory: Callable[[int], DwmController] | None = None,
         viewport_provider: Callable[[], object] | None = None,
         exit_callback: Callable[[], None] | None = None,
@@ -122,6 +123,7 @@ class SessionController(QObject):
         self.media = media
         self.window = window
         self._window_finder = window_finder
+        self._target_stable_callback = target_stable_callback
         self._dwm_factory = dwm_factory or (
             lambda destination_hwnd: DwmController(
                 destination_hwnd=destination_hwnd
@@ -161,6 +163,7 @@ class SessionController(QObject):
         self._source_window: WindowInfo | None = None
         self._source_window_seen_at: float | None = None
         self._stable_count = 0
+        self._stable_notified_hwnds: set[int] = set()
         self._codex_ready = False
         self._media_finished_at: float | None = None
         self._dwm: DwmController | None = None
@@ -333,6 +336,17 @@ class SessionController(QObject):
             return
 
         self._stable_count += 1
+        if (
+            self._stable_count == 2
+            and found.hwnd not in self._stable_notified_hwnds
+        ):
+            self._stable_notified_hwnds.add(found.hwnd)
+            if self._target_stable_callback is not None:
+                try:
+                    self._target_stable_callback(found)
+                except Exception:
+                    if self._stage_timer is not None:
+                        self._stage_timer.mark("window_alignment_failed")
         fallback_ready = (
             self._source_window_seen_at is not None
             and self._clock() - self._source_window_seen_at
