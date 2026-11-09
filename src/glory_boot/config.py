@@ -3,7 +3,7 @@ import math
 from pathlib import Path
 from typing import Any, NoReturn
 
-from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
+from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
 
 
 CONFIG_RELATIVE_PATH = Path("config") / "launcher.example.json"
@@ -62,6 +62,28 @@ def _parse_screen_frames(
     return tuple(frames)
 
 
+def _parse_skin(raw_skin: object, root: Path) -> SkinConfig:
+    if raw_skin is None:
+        return SkinConfig()
+    if not isinstance(raw_skin, dict):
+        raise ConfigError("skin 必须是对象")
+
+    enabled = raw_skin.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ConfigError("skin.enabled 必须是布尔值")
+
+    raw_path = raw_skin.get("wallpaper_path")
+    if raw_path is not None and not isinstance(raw_path, str):
+        raise ConfigError("skin.wallpaper_path 必须是字符串或 null")
+    if not raw_path:
+        return SkinConfig(enabled=enabled)
+
+    return SkinConfig(
+        enabled=enabled,
+        wallpaper_path=str((root / raw_path).resolve()),
+    )
+
+
 def load_config(root: Path) -> AppConfig:
     config_path = root / CONFIG_RELATIVE_PATH
     try:
@@ -96,6 +118,7 @@ def load_config(root: Path) -> AppConfig:
         max_wait_seconds=_number(raw, "max_wait_seconds"),
         volume=_number(raw, "volume"),
         screen_frames=_parse_screen_frames(raw.get("screen_frames")),
+        skin=_parse_skin(raw.get("skin"), root),
     )
     validate_config(config)
 
@@ -119,6 +142,7 @@ def load_config(root: Path) -> AppConfig:
         max_wait_seconds=config.max_wait_seconds,
         volume=config.volume,
         screen_frames=config.screen_frames,
+        skin=config.skin,
     )
 
 

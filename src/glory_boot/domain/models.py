@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,12 @@ class ScreenFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class SkinConfig:
+    enabled: bool = False
+    wallpaper_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     app_id: str
     process_names: tuple[str, ...]
@@ -38,3 +44,4 @@ class AppConfig:
     max_wait_seconds: float
     volume: float
     screen_frames: tuple[ScreenFrame, ...]
+    skin: SkinConfig = field(default_factory=SkinConfig)

@@ -13,6 +13,10 @@
   "transition_end": 7.6,
   "max_wait_seconds": 60.0,
   "volume": 0.35,
+  "skin": {
+    "enabled": false,
+    "wallpaper_path": null
+  },
   "screen_frames": [
     {
       "time": 0.0,
