@@ -9,5 +9,4 @@ __pycache__/
 build/
 dist/
 logs/
-assets/local/*
-!assets/local/.gitkeep
+assets/local/
