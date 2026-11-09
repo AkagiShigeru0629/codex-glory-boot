@@ -46,6 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv)
     parser = argparse.ArgumentParser(prog="glory-boot")
     parser.add_argument("--benchmark", action="store_true")
+    parser.add_argument("--disable-skin", action="store_true")
     options, qt_arguments = parser.parse_known_args(arguments[1:])
 
     root = _runtime_root()
@@ -62,6 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             qt_app=qt_app,
             timer=timer,
             benchmark=options.benchmark,
+            skin_disabled_by_cli=options.disable_skin,
         )
         exit_code = application.run(benchmark=options.benchmark)
         if options.benchmark:

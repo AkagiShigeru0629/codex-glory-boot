@@ -1,6 +1,7 @@
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -16,18 +17,23 @@ from glory_boot.adapters.win32 import (
     monitor_work_areas,
     set_window_rect,
 )
+from glory_boot.adapters.app_activation import ApplicationActivationBackend
+from glory_boot.adapters.network_ports import allocate_loopback_port
 from glory_boot.adapters.window_state import WindowStateStore
 from glory_boot.diagnostics import SingleInstanceGuard, StageTimer
 from glory_boot.domain.models import AppConfig, Rect
 from glory_boot.domain.placement import default_launcher_rect
 from glory_boot.domain.policy import HandoffReason
+from glory_boot.domain.skin import SkinProfile
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
+    LaunchResult,
     NoopProcessBackend,
 )
 from glory_boot.services.codex_readiness import CodexReadinessProbe
 from glory_boot.services.media import MediaController
 from glory_boot.services.session import SessionController
+from glory_boot.services.skin import SkinController
 from glory_boot.services.window_placement import WindowPlacementController
 from glory_boot.ui.boot_window import BootWindow
 
@@ -53,6 +59,44 @@ class QtEventProcessor(Protocol):
 class StageMarker(Protocol):
     def mark(self, name: str) -> object:
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class SkinLaunchOptions:
+    skin_enabled: bool
+    skin_port: int | None
+    launch_arguments: str
+
+
+def prepare_skin_launch(
+    config: AppConfig,
+    *,
+    skin_disabled_by_cli: bool,
+    benchmark: bool,
+    port_allocator: Callable[[], int] = allocate_loopback_port,
+) -> SkinLaunchOptions:
+    """只在实际启用且存在壁纸时申请一次本机调试端口。"""
+    if (
+        not config.skin.enabled
+        or not config.skin.wallpaper_path
+        or skin_disabled_by_cli
+        or benchmark
+    ):
+        return SkinLaunchOptions(False, None, "")
+    try:
+        port = port_allocator()
+    except OSError:
+        return SkinLaunchOptions(False, None, "")
+    if isinstance(port, bool) or not isinstance(port, int) or not 0 < port <= 65535:
+        raise ValueError("皮肤调试端口无效")
+    return SkinLaunchOptions(
+        True,
+        port,
+        (
+            "--remote-debugging-address=127.0.0.1 "
+            f"--remote-debugging-port={port}"
+        ),
+    )
 
 
 def present_initial_window(
@@ -84,11 +128,18 @@ class LauncherApplication:
         qt_app: QApplication,
         timer: StageTimer,
         benchmark: bool = False,
+        skin_disabled_by_cli: bool = False,
+        skin_profiles: tuple[SkinProfile, ...] = (),
     ) -> None:
         self._root = root
         self._config = config
         self._qt_app = qt_app
         self._timer = timer
+        self._skin_options = prepare_skin_launch(
+            config,
+            skin_disabled_by_cli=skin_disabled_by_cli,
+            benchmark=benchmark,
+        )
         self.window = BootWindow()
         self.media = MediaController(self.window)
         self.media.set_volume(config.volume)
@@ -104,12 +155,22 @@ class LauncherApplication:
             place_window=set_window_rect,
         )
         self._target_aligned = False
+        process_backend = (
+            NoopProcessBackend()
+            if benchmark
+            else (
+                ApplicationActivationBackend()
+                if self._skin_options.skin_enabled
+                else None
+            )
+        )
         self.launcher = CodexLauncher(
             config,
-            process_backend=NoopProcessBackend() if benchmark else None,
+            process_backend=process_backend,
             window_finder=(lambda _config: None)
             if benchmark
             else find_codex_window,
+            launch_arguments=self._skin_options.launch_arguments,
         )
         readiness = CodexReadinessProbe(
             local_app_data / "Codex" / "Logs",
@@ -138,7 +199,22 @@ class LauncherApplication:
             lambda: self._timer.mark("media_first_frame")
         )
         self._benchmark = benchmark
+        self.skin: SkinController | None = None
+        if (
+            self._skin_options.skin_enabled
+            and self._skin_options.skin_port is not None
+        ):
+            self.skin = SkinController(
+                config.skin,
+                root=root,
+                port=self._skin_options.skin_port,
+                profiles=skin_profiles,
+                stage_marker=timer.mark,
+                parent=self.window,
+            )
         self.session.handoff_completed.connect(self._remember_placement)
+        self.session.handoff_completed.connect(self._close_skin)
+        self.session.launch_result_ready.connect(self._start_skin)
         self.window.skip_requested.connect(
             lambda: self.session.handoff(HandoffReason.SKIPPED)
         )
@@ -156,6 +232,14 @@ class LauncherApplication:
         elif self._target_aligned:
             self._timer.mark("window_geometry_save_failed")
 
+    def _start_skin(self, result: LaunchResult) -> None:
+        if self.skin is not None:
+            self.skin.start(result.launched_pid)
+
+    def _close_skin(self) -> None:
+        if self.skin is not None:
+            self.skin.close()
+
     def run(self, *, benchmark: bool = False) -> int:
         self._benchmark = benchmark
         with SingleInstanceGuard() as guard:
@@ -163,6 +247,7 @@ class LauncherApplication:
                 existing = find_codex_window(self._config)
                 if existing is not None:
                     focus_window(existing.hwnd)
+                self._close_skin()
                 return 0
 
             self.window.show_poster_first(self._config.poster_path)
@@ -178,7 +263,10 @@ class LauncherApplication:
             self.session.start()
             if benchmark:
                 QTimer.singleShot(1500, self._qt_app.quit)
-            exit_code = self._qt_app.exec()
+            try:
+                exit_code = self._qt_app.exec()
+            finally:
+                self._close_skin()
             if benchmark:
                 self._timer.mark("benchmark_exit")
             return exit_code

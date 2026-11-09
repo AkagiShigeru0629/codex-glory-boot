@@ -94,6 +94,7 @@ class SessionController(QObject):
     hold_finished = Signal()
     handoff_started = Signal()
     handoff_completed = Signal()
+    launch_result_ready = Signal(object)
 
     def __init__(
         self,
@@ -149,6 +150,7 @@ class SessionController(QObject):
         )
         self._launch_lock = Lock()
         self._launch_future: Future[LaunchResult] | None = None
+        self._launch_result_emitted = False
         self._launch_attempts = 0
         self._launch_accepted_at: float | None = None
         self._launch_retry_at: float | None = None
@@ -411,6 +413,7 @@ class SessionController(QObject):
             self._launch_retry_at = None
             if self._stage_timer is not None:
                 self._stage_timer.mark("codex_launch_reused")
+            self._emit_launch_result(result)
             return
 
         if result.launch_requested:
@@ -418,10 +421,17 @@ class SessionController(QObject):
             self._launch_retry_at = None
             if self._stage_timer is not None:
                 self._stage_timer.mark("codex_launch_accepted")
+            self._emit_launch_result(result)
             return
 
         self._launch_accepted_at = None
         self._launch_retry_at = now + LAUNCH_FAILURE_RETRY_SECONDS
+
+    def _emit_launch_result(self, result: LaunchResult) -> None:
+        if self._launch_result_emitted:
+            return
+        self._launch_result_emitted = True
+        self.launch_result_ready.emit(result)
 
     def _retry_launch_if_needed(self) -> None:
         if (

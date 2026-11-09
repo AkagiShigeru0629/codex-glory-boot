@@ -226,6 +226,24 @@ def test_target_stable_callback_fires_once_per_window() -> None:
     assert aligned == [4321]
 
 
+def test_launch_result_ready_emits_successful_launch_pid() -> None:
+    controller, _media, launcher, _window, _now = _session(
+        launcher_results=[
+            LaunchResult(launch_requested=True, launched_pid=9876)
+        ],
+    )
+    results: list[LaunchResult] = []
+    controller.launch_result_ready.connect(results.append)
+
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+
+    assert results == [
+        LaunchResult(launch_requested=True, launched_pid=9876)
+    ]
+
+
 def test_session_plays_animation_to_end_before_waiting_for_codex() -> None:
     controller, media, launcher, window, now = _session()
     hold_events: list[None] = []

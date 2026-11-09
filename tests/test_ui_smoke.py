@@ -4,9 +4,101 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
-from glory_boot.domain.models import Rect
-from glory_boot.ui.application import present_initial_window
+from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
+from glory_boot.ui.application import (
+    SkinLaunchOptions,
+    prepare_skin_launch,
+    present_initial_window,
+)
 from glory_boot.ui.boot_window import BootWindow
+
+
+def _app_config(
+    *,
+    skin_enabled: bool,
+    wallpaper_path: str | None,
+) -> AppConfig:
+    return AppConfig(
+        app_id="OpenAI.Codex_2p2nqsd0c76g0!App",
+        process_names=("ChatGPT.exe",),
+        process_path_fragment="OpenAI.Codex_",
+        video_path="startup.mp4",
+        poster_path="poster.png",
+        duration=8.0,
+        hold_at=6.4,
+        transition_start=6.7,
+        transition_end=7.6,
+        max_wait_seconds=60.0,
+        volume=0.35,
+        screen_frames=(
+            ScreenFrame(0.0, Rect(0.36, 0.18, 0.28, 0.64), 0.75),
+            ScreenFrame(7.6, Rect(0.0, 0.0, 1.0, 1.0), 1.0),
+        ),
+        skin=SkinConfig(
+            enabled=skin_enabled,
+            wallpaper_path=wallpaper_path,
+        ),
+    )
+
+
+def test_cli_disable_skin_overrides_enabled_config() -> None:
+    calls: list[None] = []
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path="wallpaper.png",
+        ),
+        skin_disabled_by_cli=True,
+        benchmark=False,
+        port_allocator=lambda: calls.append(None) or 50123,
+    )
+
+    assert options == SkinLaunchOptions(False, None, "")
+    assert calls == []
+
+
+def test_enabled_skin_allocates_one_loopback_port() -> None:
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path="wallpaper.png",
+        ),
+        skin_disabled_by_cli=False,
+        benchmark=False,
+        port_allocator=lambda: 50123,
+    )
+
+    assert options.skin_enabled is True
+    assert options.skin_port == 50123
+    assert options.launch_arguments == (
+        "--remote-debugging-address=127.0.0.1 "
+        "--remote-debugging-port=50123"
+    )
+
+
+def test_skin_without_wallpaper_does_not_open_debug_port() -> None:
+    options = prepare_skin_launch(
+        _app_config(skin_enabled=True, wallpaper_path=None),
+        skin_disabled_by_cli=False,
+        benchmark=False,
+        port_allocator=lambda: 50123,
+    )
+
+    assert options == SkinLaunchOptions(False, None, "")
+
+
+def test_benchmark_never_enables_skin() -> None:
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path="wallpaper.png",
+        ),
+        skin_disabled_by_cli=False,
+        benchmark=True,
+        port_allocator=lambda: 50123,
+    )
+
+    assert options == SkinLaunchOptions(False, None, "")
 
 
 def test_poster_is_visible_before_player_is_created(
