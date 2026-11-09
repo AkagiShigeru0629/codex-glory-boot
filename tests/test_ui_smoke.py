@@ -5,6 +5,8 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
+import glory_boot.ui.application as application_module
+from glory_boot.adapters.win32 import WindowInfo
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
 from glory_boot.domain.skin import SkinProfile
 from glory_boot.services.codex_launcher import LaunchResult
@@ -383,6 +385,9 @@ class PresentationWindow:
     def show(self) -> None:
         self.calls.append("show")
 
+    def close(self) -> None:
+        self.calls.append("close")
+
 
 class Placement:
     def initial_viewport(self) -> Rect:
@@ -422,3 +427,40 @@ def test_present_initial_window_places_before_showing(qapp) -> None:
         "processEvents",
         "mark:window_visible",
     ]
+
+
+def test_existing_codex_is_focused_before_launcher_is_shown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = WindowInfo(
+        hwnd=4321,
+        pid=9876,
+        process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+        client_rect=Rect(0, 0, 1280, 688),
+        responsive=True,
+    )
+    focused: list[int] = []
+    application = object.__new__(LauncherApplication)
+    application._config = _app_config(
+        skin_enabled=False,
+        wallpaper_path=None,
+    )
+    application.window = PresentationWindow()
+    application.skin = None
+    application._runtime_store = None
+    application._timer = PresentationTimer()
+    application._timer.calls = application.window.calls
+    monkeypatch.setattr(
+        application_module,
+        "find_codex_window",
+        lambda _config: existing,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "focus_window",
+        focused.append,
+    )
+
+    assert application._focus_existing_codex() is True
+    assert focused == [4321]
+    assert "show" not in application.window.calls

@@ -273,6 +273,26 @@ class LauncherApplication:
         elif self._target_aligned:
             self._timer.mark("window_geometry_save_failed")
 
+    def _focus_existing_codex(self) -> bool:
+        try:
+            existing = find_codex_window(self._config)
+        except OSError:
+            return False
+        if existing is None:
+            return False
+
+        try:
+            focus_window(existing.hwnd)
+        except OSError:
+            self._timer.mark("activation_failed")
+        if self._runtime_store is not None:
+            self._runtime_store.save(existing.process_path)
+        self._timer.mark("codex_launch_reused")
+        self._close_skin()
+        self.window.close()
+        self._timer.mark("handoff_complete")
+        return True
+
     def _start_skin(self, result: LaunchResult) -> None:
         runtime_store = getattr(self, "_runtime_store", None)
         if (
@@ -297,6 +317,9 @@ class LauncherApplication:
                 if existing is not None:
                     focus_window(existing.hwnd)
                 self._close_skin()
+                return 0
+
+            if not benchmark and self._focus_existing_codex():
                 return 0
 
             self.window.show_poster_first(self._config.poster_path)

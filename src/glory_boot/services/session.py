@@ -164,6 +164,8 @@ class SessionController(QObject):
         self._hold_started_at = 0.0
         self._source_window: WindowInfo | None = None
         self._source_window_seen_at: float | None = None
+        self._source_window_last_seen_at: float | None = None
+        self._probe_miss_count = 0
         self._stable_count = 0
         self._stable_notified_hwnds: set[int] = set()
         self._codex_ready = False
@@ -322,16 +324,25 @@ class SessionController(QObject):
         content_ready: bool,
     ) -> None:
         if found is None:
+            if self._source_window is not None:
+                self._probe_miss_count += 1
+                if self._probe_miss_count < 3:
+                    return
             self._source_window = None
             self._source_window_seen_at = None
+            self._source_window_last_seen_at = None
+            self._probe_miss_count = 0
             self._stable_count = 0
             return
+        now = self._clock()
+        self._probe_miss_count = 0
+        self._source_window_last_seen_at = now
         if (
             self._source_window is None
             or self._source_window.hwnd != found.hwnd
         ):
             self._source_window = found
-            self._source_window_seen_at = self._clock()
+            self._source_window_seen_at = now
             self._stable_count = 1
             if self._stage_timer is not None:
                 self._stage_timer.mark("codex_window_found")
@@ -436,6 +447,7 @@ class SessionController(QObject):
     def _retry_launch_if_needed(self) -> None:
         if (
             self._launch_confirmed
+            or self._source_window is not None
             or self._launch_future is not None
             or self._launch_attempts >= MAX_LAUNCH_ATTEMPTS
         ):

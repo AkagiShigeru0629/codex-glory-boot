@@ -298,6 +298,9 @@ def test_retries_launch_when_a_successful_request_never_creates_a_window() -> No
 
     now[0] = 8.0
     controller.tick()
+    controller.tick()
+    controller.tick()
+    controller.tick()
 
     assert launcher.wait_for_calls(2)
     assert media.pause_calls == []
@@ -336,7 +339,23 @@ def test_does_not_retry_launch_after_codex_window_appears() -> None:
     now[0] = 10.0
     controller.tick()
 
-    assert launcher.calls == 1
+    assert launcher.wait_for_calls(2) is False
+
+
+def test_does_not_retry_while_window_is_present_but_content_is_not_ready() -> None:
+    controller, _media, launcher, _window, now = _session(
+        window_finder=lambda _config: _existing_window(),
+        content_ready_finder=lambda: False,
+    )
+    controller.start()
+    assert launcher.wait_for_calls(1)
+    controller.tick()
+    controller.tick()
+
+    now[0] = 10.0
+    controller.tick()
+
+    assert launcher.wait_for_calls(2) is False
 
 
 def test_reactivates_when_a_reused_closing_window_disappears() -> None:
@@ -361,6 +380,9 @@ def test_reactivates_when_a_reused_closing_window_disappears() -> None:
 
     now[0] = 8.0
     controller.tick()
+    controller.tick()
+    controller.tick()
+    controller.tick()
 
     assert launcher.wait_for_calls(2)
 
@@ -380,12 +402,15 @@ def test_waits_for_existing_window_before_reactivating_launch() -> None:
     controller.tick()
     controller.tick()
 
-    now[0] = 8.0
+    visible[0] = False
+    now[0] = 1.0
     controller.tick()
+    controller.tick()
+    controller.tick()
+
     assert launcher.calls == 1
 
-    visible[0] = False
-    controller.tick()
+    now[0] = 8.0
     controller.tick()
     assert launcher.wait_for_calls(2)
 
