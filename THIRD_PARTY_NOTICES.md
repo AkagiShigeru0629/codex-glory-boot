@@ -4,7 +4,7 @@
 
 ## PySide6 6.12.0
 
-- 用途：窗口、事件循环、QtMultimedia 媒体播放。
+- 用途：窗口、事件循环、QtMultimedia 媒体播放、QtNetwork 与 QtWebSockets 本地调试连接。
 - 许可证：LGPL-3.0-only 或 GPL-2.0-only 或 GPL-3.0-only；本项目采用 LGPLv3 路径规划发布。
 - 归属：The Qt Company 及 Qt for Python 贡献者。
 - 义务：保留版权与许可证信息；以动态链接方式分发 Qt 库；提供替换共享库所需信息。

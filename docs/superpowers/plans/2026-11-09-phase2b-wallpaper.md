@@ -80,7 +80,7 @@
 
 **产出：** 旧配置无需修改即可运行，皮肤默认关闭。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_skin_config.py` 写入：
 
@@ -118,7 +118,7 @@ def test_disabled_skin_does_not_require_wallpaper(config_root: Path) -> None:
     assert load_config(config_root).skin.enabled is False
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -128,11 +128,11 @@ def test_disabled_skin_does_not_require_wallpaper(config_root: Path) -> None:
 
 预期：`SkinConfig` 或 `skin` 字段不存在。
 
-- [ ] **步骤 3：实现可选配置和路径解析**
+- [x] **步骤 3：实现可选配置和路径解析**
 
 严格校验 `enabled` 是布尔值和路径是字符串。启用时把路径解析为绝对路径，但文件缺失或格式错误只留给皮肤控制器在运行时跳过，不能阻断 Codex 启动。禁用时忽略空路径。不打印壁纸内容。
 
-- [ ] **步骤 4：运行配置回归**
+- [x] **步骤 4：运行配置回归**
 
 运行：
 
@@ -164,7 +164,7 @@ def test_disabled_skin_does_not_require_wallpaper(config_root: Path) -> None:
 
 **产出：** 用于版本守卫的包版本、已登记兼容配置和本次皮肤模式的本地端口。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_skin_domain.py` 写入：
 
@@ -191,7 +191,7 @@ def test_allocated_port_is_available_on_loopback() -> None:
         probe.bind(("127.0.0.1", port))
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -201,11 +201,11 @@ def test_allocated_port_is_available_on_loopback() -> None:
 
 预期：新增模块不存在。
 
-- [ ] **步骤 3：实现纯逻辑和端口分配**
+- [x] **步骤 3：实现纯逻辑和端口分配**
 
 版本提取只匹配 `OpenAI.Codex_<版本>_<架构>__...`，找不到时返回 `None`。兼容选择要求版本完全匹配。端口通过标准库 socket 绑定 `127.0.0.1`、端口 `0` 后再关闭取得；调用方必须立即把端口传给 Codex，发现冲突时整体跳过皮肤。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -233,7 +233,7 @@ def test_allocated_port_is_available_on_loopback() -> None:
 `--remote-debugging-address=127.0.0.1 --remote-debugging-port=<port>`，
 并取得本次激活进程号；普通模式继续使用现有 `explorer.exe` 后端。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_launcher.py` 增加：
 
@@ -257,7 +257,7 @@ def test_launcher_passes_arguments_and_returns_process_id() -> None:
 
 在 `tests/test_app_activation.py` 使用注入的假激活器断言空应用标识和超长参数被拒绝；不执行真实 COM 激活。
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -267,7 +267,7 @@ def test_launcher_passes_arguments_and_returns_process_id() -> None:
 
 预期：`launch_arguments`、`launched_pid` 或新后端不存在。
 
-- [ ] **步骤 3：实现应用激活后端**
+- [x] **步骤 3：实现应用激活后端**
 
 在 `adapters/win32.py` 暴露 `process_path_for_pid(pid: int) -> str | None`，供皮肤控制器从本次激活进程取得 Codex 包路径和版本。
 
@@ -276,7 +276,7 @@ def test_launcher_passes_arguments_and_returns_process_id() -> None:
 
 普通 `QProcessBackend` 在收到非空参数时抛出 `ValueError`；皮肤模式必须显式选择应用激活后端。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -304,7 +304,7 @@ def test_launcher_passes_arguments_and_returns_process_id() -> None:
 
 **产出：** 只属于本次 Codex、只使用回环地址的目标页面。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_devtools.py` 写入：
 
@@ -337,7 +337,7 @@ def test_accepts_main_codex_page() -> None:
     assert is_codex_page(page)
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -347,11 +347,11 @@ def test_accepts_main_codex_page() -> None:
 
 预期：模块不存在。
 
-- [ ] **步骤 3：实现目标发现和端口归属**
+- [x] **步骤 3：实现目标发现和端口归属**
 
 使用 `urlsplit` 严格解析并拒绝用户名、密码、非 `ws` 协议、非 `127.0.0.1` 和端口不一致。页面选择只接受 `app://-/index.html` 主页面，排除头像、迷你窗、弹窗和通知路由。`find_pages` 使用标准库向本地 `/json/list` 发出限时请求，只能由后台工作线程调用。`listener_owner_pid` 使用 `GetExtendedTcpTable` 查询 TCP 监听表，不对端口做文本日志。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -377,7 +377,7 @@ def test_accepts_main_codex_page() -> None:
 
 **产出：** 只做背景与必要可读性修改、可以完整撤销的固定脚本。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_skin_payload.py` 写入：
 
@@ -403,7 +403,7 @@ def test_payload_has_one_marker_and_fixed_restore(tmp_path: Path) -> None:
         assert forbidden not in payload.install_expression
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -413,14 +413,14 @@ def test_payload_has_one_marker_and_fixed_restore(tmp_path: Path) -> None:
 
 预期：模块不存在。
 
-- [ ] **步骤 3：实现静态载荷**
+- [x] **步骤 3：实现静态载荷**
 
 只接受签名有效的 PNG、JPEG、WebP，限制文件大小为 `20 MiB`。在页面内使用 Blob URL，安装固定样式节点并记录原始根属性、CSS 变量值和优先级；恢复时逐项还原并释放 URL。
 
 CSS 只处理页面和内容背景、必要的文字对比度与菜单／输入框可读表面。不得改变按钮形状、字体、图标、布局或控件尺寸。JS 仅增加精确匹配
 `Ctrl+Alt+Shift+R` 的恢复快捷键。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -445,7 +445,7 @@ CSS 只处理页面和内容背景、必要的文字对比度与菜单／输入�
 
 **产出：** 非阻塞执行 `Runtime.evaluate`，超时和断线均产生结构化失败。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 使用本机 `QWebSocketServer` 或注入的假套接字客户端测试：
 
@@ -472,7 +472,7 @@ def test_response_is_matched_by_request_id(qapp) -> None:
     assert results == [(17, {"result": {"value": True}})]
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -482,11 +482,11 @@ def test_response_is_matched_by_request_id(qapp) -> None:
 
 预期：模块或客户端不存在。
 
-- [ ] **步骤 3：实现最小 CDP 客户端**
+- [x] **步骤 3：实现最小 CDP 客户端**
 
 每次调用分配稳定请求号，使用单层已发送消息映射处理响应，不把页面返回值写入日志。连接、评估和关闭均设置超时与幂等清理。不得同步等待套接字。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -513,7 +513,7 @@ def test_response_is_matched_by_request_id(qapp) -> None:
 
 **产出：** 默认关闭、失败安全、可恢复的壁纸生命周期。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_skin.py` 写入：
 
@@ -554,7 +554,7 @@ def test_incompatible_version_is_skipped() -> None:
     assert cdp.connect_calls == []
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -564,11 +564,11 @@ def test_incompatible_version_is_skipped() -> None:
 
 预期：模块不存在。
 
-- [ ] **步骤 3：实现控制器状态机**
+- [x] **步骤 3：实现控制器状态机**
 
 启动参数是会话收到的本次激活进程号；复用已有窗口或没有进程号时直接跳过。目标发现通过独立工作线程执行，结果回到 Qt 主线程。只在版本、能力、端口和进程号全部通过时连接。安装后执行检测表达式，失败立即恢复。每个终态都停止定时器、工作线程和套接字；重复调用 `close()` 必须幂等。日志使用固定阶段名和错误码，不包含页面地址或壁纸路径。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -596,7 +596,7 @@ def test_incompatible_version_is_skipped() -> None:
 
 **产出：** 普通启动默认不开放调试端口；显式启用皮肤时才走增强路径。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 增加应用装配测试：
 
@@ -620,7 +620,7 @@ def test_enabled_skin_allocates_one_loopback_port() -> None:
     )
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -630,11 +630,11 @@ def test_enabled_skin_allocates_one_loopback_port() -> None:
 
 预期：命令行或装配接口不存在。
 
-- [ ] **步骤 3：接入默认关闭的皮肤模式**
+- [x] **步骤 3：接入默认关闭的皮肤模式**
 
 在分配端口和连接控制器之前先检查配置与 CLI 覆盖。应用连接 `launch_result_ready`，把 `launched_pid` 交给皮肤控制器；已有窗口没有进程号时皮肤只记录跳过。控制器跟随 Qt 应用生命周期创建和关闭；交接完成退出启动器前调用 `skin.close()`，但已经注入的页面样式继续存在，直到用户恢复、页面重载或 Codex 退出。调试 WebSocket 在安装和检测完成后立即关闭。
 
-- [ ] **步骤 4：运行 UI 和皮肤目标测试**
+- [x] **步骤 4：运行 UI 和皮肤目标测试**
 
 运行：
 
@@ -666,7 +666,7 @@ def test_enabled_skin_allocates_one_loopback_port() -> None:
 
 **产出：** 可回退的本地增强包和可核查的兼容性、许可与验收记录。
 
-- [ ] **步骤 1：运行全量自动测试**
+- [x] **步骤 1：运行全量自动测试**
 
 运行：
 
@@ -676,7 +676,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
 
 预期：全部通过，未新增外部依赖和敏感日志。
 
-- [ ] **步骤 2：更新资源与打包合同**
+- [x] **步骤 2：更新资源与打包合同**
 
 在 setuptools 包数据和 PyInstaller `datas` 中包含三个资源文件，加入
 `hiddenimports=["PySide6.QtWebSockets"]`。增加仓库合同测试，断言资源文件存在、没有 Node 启动脚本、包配置包含 WebSocket 资源。
@@ -698,15 +698,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
 
 把本次版本、所需选择器和主题令牌加入兼容配置；验证失败的版本不登记。若当前版本验证失败，保留空兼容列表并报告失败原因，不把实验失败描述成完成。
 
-- [ ] **步骤 5：构建并检查发布包**
+- [x] **步骤 5：构建并检查发布包**
 
 运行现有构建和打包命令，检查资源、Qt WebSocket 插件、配置、第三方声明和压缩包；确认壁纸私有素材没有进入公开包，除非已经明确允许。
 
-- [ ] **步骤 6：同步 README、来源说明和执行记录**
+- [x] **步骤 6：同步 README、来源说明和执行记录**
 
 记录已验证版本、开关、恢复快捷键、测试命令、人工验收结果、已知限制和剩余风险。参考项目只记录设计思路和来源，不复制无明确许可的实现代码。
 
-- [ ] **步骤 7：检查工作区**
+- [x] **步骤 7：检查工作区**
 
 运行：
 
@@ -715,3 +715,17 @@ git status --short
 ```
 
 确认没有 `.venv/`、`.reference/`、日志、构建产物、调试端口记录、用户壁纸或页面数据进入待提交范围。停止并汇报；提交、默认启用和发布需要新的明确同意。
+
+## 执行记录
+
+| 日期 | 项目 | 结果 |
+| --- | --- | --- |
+| 2026-11-09 | 自动测试 | `258` 通过、`0` 失败 |
+| 2026-11-09 | 资源加载 | 内置兼容列表为空，缺少可靠版本或兼容配置时皮肤保持关闭 |
+| 2026-11-09 | 运行态版本 | 安装脚本和 `sync-codex-runtime.ps1` 只在找到现存 Store 可执行文件时写入版本记录 |
+| 2026-11-09 | onedir 与压缩包 | `skin.css`、`skin.js`、`skin_profiles.json`、`Qt6WebSockets.dll`、`QtWebSockets.pyd` 均存在 |
+| 2026-11-09 | 发布包烟雾检查 | 媒体、QtMultimedia、资源和压缩包日志隔离检查通过 |
+| 2026-11-09 | 打包基准 | 首个可见窗口 `275.4 ms`、媒体首帧 `458.7 ms`、Codex 启动请求 `277.9 ms` |
+| 2026-11-09 | 压缩包 SHA-256 | `f40155923855f3e648cb5aaaedf1fa56c5d971cb75cc44ca514ee3c356751c4e` |
+
+步骤 3 和步骤 4 尚未执行：真实 Codex 启动、注入、恢复和版本登记需要秋月大人的明确确认。当前兼容列表保持为空，不能视为真实壁纸功能已经验收完成。

@@ -8,6 +8,7 @@ from typing import Protocol, Sequence
 from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
+from glory_boot.adapters.codex_runtime import CodexRuntimeStore
 from glory_boot.adapters.win32 import (
     WindowInfo,
     client_screen_rect,
@@ -176,11 +177,13 @@ class LauncherApplication:
         skin_disabled_by_cli: bool = False,
         skin_profiles: tuple[SkinProfile, ...] = (),
         codex_version: str | None = None,
+        runtime_store: CodexRuntimeStore | None = None,
     ) -> None:
         self._root = root
         self._config = config
         self._qt_app = qt_app
         self._timer = timer
+        self._runtime_store = runtime_store
         self._skin_options = prepare_skin_launch(
             config,
             skin_disabled_by_cli=skin_disabled_by_cli,
@@ -271,6 +274,14 @@ class LauncherApplication:
             self._timer.mark("window_geometry_save_failed")
 
     def _start_skin(self, result: LaunchResult) -> None:
+        runtime_store = getattr(self, "_runtime_store", None)
+        if (
+            result.existing_window_hwnd is not None
+            and runtime_store is not None
+        ):
+            existing = find_codex_window(self._config)
+            if existing is not None:
+                runtime_store.save(existing.process_path)
         if self.skin is not None:
             self.skin.start(result.launched_pid)
 

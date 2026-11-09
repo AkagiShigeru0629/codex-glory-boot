@@ -82,6 +82,11 @@ def check_package() -> None:
         ("media", "startup.mp4"),
         ("media", "poster.png"),
         ("config", "launcher.example.json"),
+        ("_internal", "glory_boot", "resources", "skin.css"),
+        ("_internal", "glory_boot", "resources", "skin.js"),
+        ("_internal", "glory_boot", "resources", "skin_profiles.json"),
+        ("_internal", "PySide6", "Qt6WebSockets.dll"),
+        ("_internal", "PySide6", "QtWebSockets.pyd"),
     }
     for parts in required_suffixes:
         path = package.joinpath(*parts)

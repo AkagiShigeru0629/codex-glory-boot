@@ -97,4 +97,13 @@ $BackupData = [ordered]@{
 New-Item -ItemType Directory -Path $StateRoot -Force | Out-Null
 $BackupData | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding utf8
 
+$RuntimeSync = Join-Path $PSScriptRoot "sync-codex-runtime.ps1"
+if (Test-Path -LiteralPath $RuntimeSync) {
+    try {
+        & $RuntimeSync | Out-Null
+    } catch {
+        Write-Warning "Codex runtime version was not recorded; wallpaper remains disabled."
+    }
+}
+
 Write-Output "Shortcut installed: $ShortcutPath"

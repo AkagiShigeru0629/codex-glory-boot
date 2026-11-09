@@ -78,3 +78,24 @@ def test_third_party_license_declarations_are_present() -> None:
         "dragon-codex-boot",
     ):
         assert required_name in notices
+
+
+def test_skin_resources_are_packaged_with_qt_websockets() -> None:
+    resource_root = ROOT / "src" / "glory_boot" / "resources"
+    for name in ("skin.css", "skin.js", "skin_profiles.json"):
+        assert (resource_root / name).is_file(), f"缺少皮肤资源: {name}"
+
+    pyproject = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    package_data = pyproject["tool"]["setuptools"]["package-data"]["glory_boot"]
+    assert "resources/*.css" in package_data
+    assert "resources/*.js" in package_data
+    assert "resources/*.json" in package_data
+
+    spec_text = (ROOT / "packaging" / "glory_boot.spec").read_text(
+        encoding="utf-8"
+    )
+    assert '"PySide6.QtWebSockets"' in spec_text
+    assert '"glory_boot/resources"' in spec_text
+    assert not (ROOT / "package.json").exists()

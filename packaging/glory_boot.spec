@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 project_root = Path(SPECPATH).parent
+resource_root = project_root / "src" / "glory_boot" / "resources"
 
 a = Analysis(
     [str(project_root / "src" / "glory_boot" / "__main__.py")],
@@ -14,8 +15,12 @@ a = Analysis(
         (str(project_root / "media" / "startup.mp4"), "media"),
         (str(project_root / "media" / "poster.png"), "media"),
         (str(project_root / "THIRD_PARTY_NOTICES.md"), "."),
+        *[
+            (str(resource), "glory_boot/resources")
+            for resource in sorted(resource_root.glob("*"))
+        ],
     ],
-    hiddenimports=[],
+    hiddenimports=["PySide6.QtWebSockets"],
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
