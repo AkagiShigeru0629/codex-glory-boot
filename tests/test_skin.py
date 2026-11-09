@@ -129,6 +129,7 @@ def _skin_controller(
         cdp_factory=lambda: cdp_client,
         interval_ms=5,
         monitor_interval_ms=100_000,
+        reconnect_delay_ms=5,
         timeout_ms=timeout_ms,
         connect_timeout_ms=20,
         evaluate_timeout_ms=20,
@@ -347,6 +348,30 @@ def test_installed_wallpaper_is_reapplied_after_page_reset(
 
     assert cdp.install_count == 2
     assert [call[1] for call in cdp.evaluation_calls[-3:]] == [5, 2, 3]
+    controller.close()
+
+
+def test_connection_close_after_install_rediscovers_page(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    first = FakeCdp()
+    controller, _cdp = _skin_controller(tmp_path, cdp=first)
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    second = FakeCdp()
+    controller._cdp_factory = lambda: second
+    controller._on_cdp_failed("connection_closed")
+
+    for _ in range(50):
+        if second.connect_calls:
+            break
+        QTest.qWait(10)
+        qapp.processEvents()
+
+    assert second.connect_calls == [(PAGE.websocket_url, 20)]
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
     controller.close()
 
 

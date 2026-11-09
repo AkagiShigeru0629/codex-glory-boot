@@ -123,13 +123,19 @@ class SkinController(QObject):
         stage_marker: Callable[[str], object] | None = None,
         interval_ms: int = 250,
         monitor_interval_ms: int = 1000,
+        reconnect_delay_ms: int = 250,
         timeout_ms: int = 15_000,
         connect_timeout_ms: int = 3000,
         evaluate_timeout_ms: int = 3000,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
-        if interval_ms <= 0 or monitor_interval_ms <= 0 or timeout_ms <= 0:
+        if (
+            interval_ms <= 0
+            or monitor_interval_ms <= 0
+            or reconnect_delay_ms <= 0
+            or timeout_ms <= 0
+        ):
             raise ValueError("皮肤等待时间必须为正数")
         if connect_timeout_ms <= 0 or evaluate_timeout_ms <= 0:
             raise ValueError("皮肤连接超时必须是正数")
@@ -170,12 +176,17 @@ class SkinController(QObject):
         self._payload: SkinPayload | None = None
         self._restore_after_failure = False
         self._health_check_pending = False
+        self._recovering = False
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(interval_ms)
         self._poll_timer.timeout.connect(self._poll)
         self._monitor_timer = QTimer(self)
         self._monitor_timer.setInterval(monitor_interval_ms)
         self._monitor_timer.timeout.connect(self._check_installed_skin)
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.setInterval(reconnect_delay_ms)
+        self._reconnect_timer.timeout.connect(self._resume_discovery)
 
     @property
     def state(self) -> SkinState:
@@ -239,6 +250,7 @@ class SkinController(QObject):
         self._closed = True
         self._poll_timer.stop()
         self._monitor_timer.stop()
+        self._reconnect_timer.stop()
         self._close_cdp()
         worker = self._worker
         self._worker = None
@@ -466,6 +478,9 @@ class SkinController(QObject):
             return
         if not reason:
             reason = "unknown"
+        if self._state is SkinState.INSTALLED:
+            self._begin_recovery()
+            return
         if self._phase in {"install", "detect"}:
             self._restore_then_fail(f"skin_cdp_{reason}")
             return
@@ -473,6 +488,27 @@ class SkinController(QObject):
             self._finish(SkinState.FAILED, "skin_restore_failed")
             return
         self._finish(SkinState.FAILED, f"skin_cdp_{reason}")
+
+    def _begin_recovery(self) -> None:
+        if self._closed or self._reconnect_timer.isActive():
+            return
+        self._monitor_timer.stop()
+        self._set_state(SkinState.WAITING)
+        self._mark("skin_reload_waiting")
+        self._close_cdp()
+        self._recovering = True
+        self._reconnect_timer.start()
+
+    def _resume_discovery(self) -> None:
+        if self._closed or self._state is not SkinState.WAITING:
+            return
+        self._deadline = time.monotonic() + self._timeout_seconds
+        self._worker = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="glory-skin-reconnect",
+        )
+        self._poll_timer.start()
+        self._poll()
 
     def _restore_then_fail(self, reason: str) -> None:
         if self._cdp is None or self._payload is None:
@@ -488,10 +524,12 @@ class SkinController(QObject):
 
     def _activate_installed(self, marker: str) -> None:
         self._set_state(SkinState.INSTALLED)
-        self._mark(marker)
+        self._mark("skin_reinstalled" if self._recovering else marker)
         self._poll_timer.stop()
         self._phase = "installed"
         self._health_check_pending = False
+        self._recovering = False
+        self._reconnect_timer.stop()
         self._monitor_timer.start()
 
     def _check_installed_skin(self) -> None:
@@ -518,6 +556,7 @@ class SkinController(QObject):
         self._mark(marker)
         self._poll_timer.stop()
         self._monitor_timer.stop()
+        self._reconnect_timer.stop()
         self._close_cdp()
         worker = self._worker
         self._worker = None
