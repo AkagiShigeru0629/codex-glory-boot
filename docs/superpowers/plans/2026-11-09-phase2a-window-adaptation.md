@@ -63,7 +63,7 @@
 
 **产出：** 应用初始化使用的安全矩形，以及历史几何的有效性判断。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_placement.py` 写入：
 
@@ -96,7 +96,7 @@ def test_is_rect_visible_requires_minimum_intersection() -> None:
     assert not is_rect_visible(Rect(-1900, 100, 50, 50), monitors)
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -106,11 +106,11 @@ def test_is_rect_visible_requires_minimum_intersection() -> None:
 
 预期：`ModuleNotFoundError` 或无法导入新增函数。
 
-- [ ] **步骤 3：实现纯函数**
+- [x] **步骤 3：实现纯函数**
 
 `default_launcher_rect` 先在 `work_area` 内缩进得到可用区域，再调用现有 `centered` 保持 16:9。`is_rect_visible` 检查矩形与任一显示器交集的宽高是否同时达到最小值；所有输入不是有限正尺寸时返回安全结果或抛出 `ValueError`。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -133,7 +133,7 @@ def test_is_rect_visible_requires_minimum_intersection() -> None:
 
 **产出：** 应用启动前可读取的历史客户区，以及交接成功后可写入的物理矩形。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_window_state.py` 写入：
 
@@ -162,7 +162,7 @@ def test_corrupt_or_invalid_state_is_ignored(tmp_path: Path) -> None:
     assert list(tmp_path.glob("*.tmp")) == []
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -172,11 +172,11 @@ def test_corrupt_or_invalid_state_is_ignored(tmp_path: Path) -> None:
 
 预期：模块不存在。
 
-- [ ] **步骤 3：实现原子 JSON 存储**
+- [x] **步骤 3：实现原子 JSON 存储**
 
 使用 `json` 和 `os.replace` 写入同目录临时文件。拒绝布尔值、非有限值、宽高不是正数、宽高小于 Codex 最小客户区 `450×280` 的记录。读取任何格式错误都返回 `None`，不向界面抛出异常。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过，且临时文件无残留。
 
@@ -198,7 +198,7 @@ def test_corrupt_or_invalid_state_is_ignored(tmp_path: Path) -> None:
 
 **产出：** 物理屏幕坐标下的 Codex 客户区，以及无边框启动器的物理矩形定位。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_win32.py` 增加输入校验测试：
 
@@ -217,7 +217,7 @@ def test_set_window_rect_rejects_invalid_rectangle() -> None:
         set_window_rect(123, Rect(0, 0, 0, 100))
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -227,11 +227,11 @@ def test_set_window_rect_rejects_invalid_rectangle() -> None:
 
 预期：无法导入新增函数。
 
-- [ ] **步骤 3：实现 Win32 几何调用**
+- [x] **步骤 3：实现 Win32 几何调用**
 
 为 `ClientToScreen` 和 `SetWindowPos` 设置准确的 `argtypes`、`restype`。`client_screen_rect` 调用 `GetClientRect` 后把客户区原点转换为屏幕坐标；`set_window_rect` 使用 `SWP_NOACTIVATE | SWP_SHOWWINDOW` 和 `HWND_TOPMOST`，不得改变启动器的无边框、置顶或透明度状态。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期新增测试及既有窗口筛选测试全部通过。
 
@@ -257,7 +257,7 @@ def test_set_window_rect_rejects_invalid_rectangle() -> None:
 
 **产出：** 应用和 `SessionController` 共用的当前视口，以及不抛异常的校准结果。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_window_placement.py` 写入以下核心断言：
 
@@ -294,7 +294,7 @@ def test_align_failure_keeps_previous_viewport() -> None:
 
 测试辅助对象只使用内存状态，不创建真实窗口。
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -304,11 +304,11 @@ def test_align_failure_keeps_previous_viewport() -> None:
 
 预期：模块和服务不存在。
 
-- [ ] **步骤 3：实现布局控制器**
+- [x] **步骤 3：实现布局控制器**
 
 控制器持有当前视口和是否已经校准的状态。`align` 只对同一 `hwnd` 成功校准一次；失败时返回 `False` 并保留原视口。`remember_success` 只在已经成功校准时写入存储，写入失败返回 `False`。
 
-- [ ] **步骤 4：运行目标测试**
+- [x] **步骤 4：运行目标测试**
 
 运行同一命令，预期全部通过。
 
@@ -330,7 +330,7 @@ def test_align_failure_keeps_previous_viewport() -> None:
 
 **产出：** 应用能在不修改领域时间线的情况下执行一次几何校准。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_session.py` 增加：
 
@@ -349,7 +349,7 @@ def test_target_stable_callback_fires_once_per_window() -> None:
     assert aligned == [4321]
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -359,11 +359,11 @@ def test_target_stable_callback_fires_once_per_window() -> None:
 
 预期：构造参数不接受 `target_stable_callback`。
 
-- [ ] **步骤 3：实现稳定回调**
+- [x] **步骤 3：实现稳定回调**
 
 在 `_apply_codex_state` 确认同一窗口稳定后调用一次回调。回调异常不得改变 Codex 就绪判断、启动重试或交接策略；会话记录布尔失败结果，但不得记录窗口标题或内容。
 
-- [ ] **步骤 4：运行目标测试与会话回归**
+- [x] **步骤 4：运行目标测试与会话回归**
 
 运行：
 
@@ -393,7 +393,7 @@ def test_target_stable_callback_fires_once_per_window() -> None:
 
 **产出：** 使用历史或默认矩形显示首帧，稳定后校准一次，并以校准矩形供 DWM 使用。
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
 在 `tests/test_ui_smoke.py` 增加窗口生命周期测试：
 
@@ -413,7 +413,7 @@ def test_launcher_window_can_present_at_non_fullscreen_rect(
     window.close()
 ```
 
-- [ ] **步骤 2：运行测试并确认失败**
+- [x] **步骤 2：运行测试并确认失败**
 
 运行：
 
@@ -423,13 +423,13 @@ def test_launcher_window_can_present_at_non_fullscreen_rect(
 
 预期：如果测试辅助函数或当前行为尚未满足，测试失败。
 
-- [ ] **步骤 3：接入控制器并替换全屏路径**
+- [x] **步骤 3：接入控制器并替换全屏路径**
 
 使用 `%LOCALAPPDATA%\GloryBoot\window-state.json` 作为持久化路径；使用当前光标所在显示器工作区生成默认矩形。先创建原生窗口句柄并设置物理矩形，再显示窗口和记录 `window_visible`。把同一视口传给会话，并在成功交接后记录最终 Codex 客户区。
 
 校准回调和 DWM 更新继续运行在 Qt 主线程；不得在后台线程直接设置窗口几何。
 
-- [ ] **步骤 4：运行界面和会话测试**
+- [x] **步骤 4：运行界面和会话测试**
 
 运行：
 
@@ -456,7 +456,7 @@ def test_launcher_window_can_present_at_non_fullscreen_rect(
 
 **产出：** 可审阅的第二阶段 A 交付记录和明确风险。
 
-- [ ] **步骤 1：运行全量自动测试**
+- [x] **步骤 1：运行全量自动测试**
 
 运行：
 
@@ -466,7 +466,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
 
 预期：全部测试通过，无新增警告或残留进程。
 
-- [ ] **步骤 2：运行打包启动基准**
+- [x] **步骤 2：运行打包启动基准**
 
 按项目现有打包与基准命令重建 onedir 包，记录首个可见窗口、媒体首帧、Codex 启动请求和是否发生尾帧停留。预期首帧目标仍为 `<= 800 ms`；若超限，记录瓶颈，不得直接声称完成。
 
@@ -483,11 +483,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test.ps1
 
 预期：启动器与 Codex 客户区一致，DWM 最终覆盖同一矩形，失败时仍进入可操作 Codex。
 
-- [ ] **步骤 4：同步 README 和执行记录**
+- [x] **步骤 4：同步 README 和执行记录**
 
 只写已经验证的事实，更新第二阶段 A 当前状态、配置位置、测试命令、基准值和剩余人工风险。
 
-- [ ] **步骤 5：检查工作区**
+- [x] **步骤 5：检查工作区**
 
 运行：
 
@@ -496,3 +496,18 @@ git status --short
 ```
 
 确认没有 `.venv/`、`.reference/`、日志、构建产物、壁纸私有素材或真实窗口截图进入待提交范围。停止并汇报；提交和最终发布需要新的明确同意。
+
+## 执行记录
+
+| 日期 | 提交 | 改动 | 自动验证 | 基准与风险 |
+| --- | --- | --- | --- | --- |
+| 2026-11-09 | `25ec2dc` | 建立第二阶段基线；保留秋月大人允许提交的本地媒体 | 153 通过 | 基线仓库此前没有提交 |
+| 2026-11-09 | `4d2fe09` | 增加安全默认矩形、显示器可见性和仓库私有目录忽略修正 | 161 通过 | 浮点覆盖比例采用近似断言 |
+| 2026-11-09 | `a808aeb` | 增加窗口几何原子持久化和损坏回退 | 164 通过 | 只保存坐标尺寸，不保存窗口内容 |
+| 2026-11-09 | `72d9fad` | 增加客户区屏幕坐标、物理窗口定位和显示器工作区 | 167 通过 | 原生调用通过假 Win32 边界测试 |
+| 2026-11-09 | `d736439` | 编排历史视口、一次校准和成功记录 | 172 通过 | 校准失败保持原视口 |
+| 2026-11-09 | `14b905a` | 在 Codex 窗口稳定时触发一次校准 | 173 通过 | 回调异常不改变就绪和交接策略 |
+| 2026-11-09 | `111d5a0` | 应用接入初始几何、DWM 共用视口和成功持久化 | 176 通过 | 原生显示器几何增加 Win32 工作区枚举 |
+| 2026-11-09 | 本任务文档提交 | 同步 README、计划和当前验证事实 | 待本次最终回归 | 真实 Codex 的人工多显示器、DPI 和最大化验收未执行 |
+
+第二阶段 A 打包基准使用无外部启动副作用的后端：首个可见窗口 `322.4 ms`、媒体首帧 `517.6 ms`、Codex 启动请求 `326.3 ms`，均未超过首帧 `800 ms` 目标。基准没有启动真实 Codex，因此不能证明实际窗口校准成功。
