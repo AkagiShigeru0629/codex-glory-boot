@@ -111,6 +111,27 @@ def test_runtime_store_ignores_corrupt_json(tmp_path: Path) -> None:
     assert CodexRuntimeStore(path).load() is None
 
 
+def test_runtime_store_accepts_windows_powershell_utf8_bom(
+    tmp_path: Path,
+) -> None:
+    executable = _store_executable(tmp_path, "26.1103.4239.0")
+    path = tmp_path / "codex-runtime.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "26.1103.4239.0",
+                "executable_path": str(executable.resolve()),
+            }
+        ),
+        encoding="utf-8-sig",
+    )
+
+    install = CodexRuntimeStore(path).load()
+
+    assert install is not None
+    assert install.version == "26.1103.4239.0"
+
+
 def test_runtime_state_schema_does_not_include_user_content(
     tmp_path: Path,
 ) -> None:

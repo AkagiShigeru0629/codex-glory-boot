@@ -57,7 +57,7 @@ class CodexRuntimeStore:
     def load(self) -> CodexRuntimeInstall | None:
         try:
             raw: Any = json.loads(
-                self._path.read_text(encoding="utf-8"),
+                self._path.read_text(encoding="utf-8-sig"),
                 parse_constant=_reject_constant,
             )
         except (OSError, ValueError, TypeError):

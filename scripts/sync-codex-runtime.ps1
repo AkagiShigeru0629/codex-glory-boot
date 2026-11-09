@@ -35,5 +35,10 @@ $Payload = [ordered]@{
 }
 
 New-Item -ItemType Directory -Path $StateRoot -Force | Out-Null
-$Payload | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding utf8
+$Json = $Payload | ConvertTo-Json
+[IO.File]::WriteAllText(
+    $StatePath,
+    $Json,
+    [Text.UTF8Encoding]::new($false)
+)
 Write-Output "runtime=$Version"
