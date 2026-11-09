@@ -1,8 +1,9 @@
 import json
 import re
 from dataclasses import dataclass
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 
 
 MAX_TARGETS_BYTES = 1_048_576
@@ -10,6 +11,11 @@ _AUXILIARY_ROUTE = re.compile(
     r"(?:avatar|quick[.-]?chat|detached|mini|popover|notification)",
     re.IGNORECASE,
 )
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HTTPError(req.full_url, code, msg, headers, fp)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +87,10 @@ def parse_targets(
 
 def is_codex_page(page: DevToolsPage) -> bool:
     """判断目标是否为可注入的 Codex 主页面。"""
-    parsed = urlsplit(page.url)
+    try:
+        parsed = urlsplit(page.url)
+    except ValueError:
+        return False
     if (
         parsed.scheme != "app"
         or parsed.hostname != "-"
@@ -104,7 +113,7 @@ def find_pages(
     if timeout_ms <= 0:
         raise ValueError("超时时间必须为正数")
 
-    opener = build_opener(ProxyHandler({}))
+    opener = build_opener(ProxyHandler({}), _RejectRedirects())
     with opener.open(
         f"http://127.0.0.1:{port}/json/list",
         timeout=timeout_ms / 1000,

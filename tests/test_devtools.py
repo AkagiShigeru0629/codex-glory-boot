@@ -3,6 +3,7 @@ import socket
 import struct
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from urllib.error import HTTPError
 
 import pytest
 
@@ -45,6 +46,16 @@ def test_accepts_main_codex_page() -> None:
     )
 
     assert is_codex_page(page)
+
+
+def test_malformed_codex_page_url_is_rejected() -> None:
+    page = DevToolsPage(
+        "1",
+        "app://[bad",
+        "ws://127.0.0.1:50123/devtools/page/1",
+    )
+
+    assert not is_codex_page(page)
 
 
 @pytest.mark.parametrize(
@@ -131,6 +142,34 @@ def test_find_pages_reads_only_local_json_targets() -> None:
                 f"ws://127.0.0.1:{port}/devtools/page/main",
             ),
         )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
+
+def test_find_pages_rejects_http_redirects() -> None:
+    request_paths: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            request_paths.append(self.path)
+            self.send_response(302)
+            self.send_header("Location", "http://192.0.2.1/")
+            self.end_headers()
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(HTTPError) as error:
+            find_pages(port, timeout_ms=1000)
+        assert error.value.code == 302
+        assert request_paths == ["/json/list"]
     finally:
         server.shutdown()
         server.server_close()
