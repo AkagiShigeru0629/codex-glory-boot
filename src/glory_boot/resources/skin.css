@@ -1,0 +1,44 @@
+html[data-glory-boot-skin="active"] {
+    background-color: #0b0d12 !important;
+}
+
+html[data-glory-boot-skin="active"] body {
+    background-color: #0b0d12 !important;
+    background-image:
+        linear-gradient(
+            rgb(9 12 18 / var(--glory-boot-wash, 0.72)),
+            rgb(9 12 18 / var(--glory-boot-wash, 0.72))
+        ),
+        var(--glory-boot-wallpaper) !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    background-size: cover !important;
+    background-attachment: fixed !important;
+}
+
+html[data-glory-boot-skin="active"]
+    :is(
+        #root,
+        [data-app-shell-frame],
+        [data-app-shell-page-surface="true"]
+    ) {
+    background-color: transparent !important;
+}
+
+html[data-glory-boot-skin="active"] .app-shell-left-panel {
+    background-color: rgb(9 12 18 / 0.22) !important;
+}
+
+html[data-glory-boot-skin="active"]
+    :is(
+        [role="dialog"],
+        [role="menu"],
+        [role="listbox"],
+        textarea,
+        input,
+        [contenteditable="true"],
+        pre,
+        code
+    ) {
+    background-color: rgb(14 17 24 / 0.94) !important;
+}
