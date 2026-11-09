@@ -31,6 +31,7 @@ class PlacementHarness:
         saved: Rect | None = None,
         client_rect: Callable[[int], Rect] | None = None,
         client_rect_error: Exception | None = None,
+        default_rect_error: Exception | None = None,
     ) -> None:
         self.store = WindowStateStore(tmp_path / "window-state.json")
         if saved is not None:
@@ -38,11 +39,12 @@ class PlacementHarness:
         self.placed: list[tuple[int, Rect]] = []
         self.client_rect_calls: list[int] = []
         self.client_rect_error = client_rect_error
+        self.default_rect_error = default_rect_error
         self.controller = WindowPlacementController(
             window_hwnd=lambda: 900,
             state_store=self.store,
             monitors=lambda: MONITORS,
-            default_rect=lambda: Rect(100, 100, 1280, 720),
+            default_rect=lambda: self._default_rect(),
             client_rect=client_rect or self._client_rect,
             place_window=self._place_window,
         )
@@ -52,6 +54,11 @@ class PlacementHarness:
         if self.client_rect_error is not None:
             raise self.client_rect_error
         return Rect(-1920, 40, 1400, 820)
+
+    def _default_rect(self) -> Rect:
+        if self.default_rect_error is not None:
+            raise self.default_rect_error
+        return Rect(100, 100, 1280, 720)
 
     def _place_window(self, hwnd: int, rect: Rect) -> None:
         self.placed.append((hwnd, rect))
@@ -72,6 +79,17 @@ def test_initial_viewport_rejects_offscreen_saved_rect(tmp_path: Path) -> None:
     harness = PlacementHarness(tmp_path, saved=Rect(5000, 5000, 800, 600))
 
     assert harness.controller.initial_viewport() == Rect(100, 100, 1280, 720)
+
+
+def test_initial_viewport_uses_emergency_rect_when_defaults_fail(
+    tmp_path: Path,
+) -> None:
+    harness = PlacementHarness(
+        tmp_path,
+        default_rect_error=OSError("display unavailable"),
+    )
+
+    assert harness.controller.initial_viewport() == Rect(0, 0, 1280, 720)
 
 
 def test_align_moves_window_once_and_updates_viewport(tmp_path: Path) -> None:

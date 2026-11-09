@@ -17,7 +17,7 @@ SMTO_ABORTIFHUNG = 0x0002
 SW_RESTORE = 9
 HWND_TOPMOST = -1
 SWP_NOACTIVATE = 0x0010
-SWP_SHOWWINDOW = 0x0040
+MONITOR_DEFAULTTONEAREST = 2
 MIN_CLIENT_WIDTH = 450
 MIN_CLIENT_HEIGHT = 280
 CODEX_WINDOW_CLASS = "Chrome_WidgetWin_1"
@@ -65,6 +65,15 @@ class POINT(ctypes.Structure):
     ]
 
 
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", RECT),
+        ("rcWork", RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
@@ -72,6 +81,13 @@ _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     wintypes.BOOL,
     wintypes.HWND,
+    wintypes.LPARAM,
+)
+_MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    wintypes.BOOL,
+    wintypes.HANDLE,
+    wintypes.HANDLE,
+    ctypes.POINTER(RECT),
     wintypes.LPARAM,
 )
 
@@ -94,6 +110,22 @@ _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 _user32.GetClientRect.restype = wintypes.BOOL
 _user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
 _user32.ClientToScreen.restype = wintypes.BOOL
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
+_user32.GetCursorPos.restype = wintypes.BOOL
+_user32.MonitorFromPoint.argtypes = [POINT, wintypes.DWORD]
+_user32.MonitorFromPoint.restype = wintypes.HANDLE
+_user32.GetMonitorInfoW.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(MONITORINFO),
+]
+_user32.GetMonitorInfoW.restype = wintypes.BOOL
+_user32.EnumDisplayMonitors.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(RECT),
+    _MONITORENUMPROC,
+    wintypes.LPARAM,
+]
+_user32.EnumDisplayMonitors.restype = wintypes.BOOL
 _user32.SendMessageTimeoutW.argtypes = [
     wintypes.HWND,
     wintypes.UINT,
@@ -233,10 +265,54 @@ def set_window_rect(hwnd: int, rect: Rect) -> None:
         int(round(rect.y)),
         int(round(rect.width)),
         int(round(rect.height)),
-        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        SWP_NOACTIVATE,
     )
     if not result:
         raise Win32Error("无法设置启动器窗口矩形")
+
+
+def _monitor_work_rect(monitor: int) -> Rect:
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not _user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        raise Win32Error("无法读取显示器工作区")
+    work = info.rcWork
+    return Rect(
+        x=work.left,
+        y=work.top,
+        width=work.right - work.left,
+        height=work.bottom - work.top,
+    )
+
+
+def cursor_work_area() -> Rect:
+    """读取光标所在显示器的物理工作区。"""
+    point = POINT()
+    if not _user32.GetCursorPos(ctypes.byref(point)):
+        raise Win32Error("无法读取光标位置")
+    monitor = _user32.MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST)
+    if not monitor:
+        raise Win32Error("无法确定光标所在显示器")
+    return _monitor_work_rect(int(monitor))
+
+
+def monitor_work_areas() -> tuple[Rect, ...]:
+    """枚举所有显示器的物理工作区。"""
+    areas: list[Rect] = []
+
+    @_MONITORENUMPROC
+    def collect(
+        monitor: int,
+        _hdc: int,
+        _clip: object,
+        _data: int,
+    ) -> bool:
+        areas.append(_monitor_work_rect(int(monitor)))
+        return True
+
+    if not _user32.EnumDisplayMonitors(0, None, collect, 0):
+        raise Win32Error("枚举显示器工作区失败")
+    return tuple(areas)
 
 
 def _is_cloaked(hwnd: int) -> bool:

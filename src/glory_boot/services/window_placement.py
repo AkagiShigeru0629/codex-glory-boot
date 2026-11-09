@@ -6,6 +6,9 @@ from glory_boot.domain.models import Rect
 from glory_boot.domain.placement import is_rect_visible
 
 
+EMERGENCY_VIEWPORT = Rect(0, 0, 1280, 720)
+
+
 class WindowPlacementController:
     """选择初始视口，并在目标窗口稳定后校准一次启动器几何。"""
 
@@ -33,11 +36,18 @@ class WindowPlacementController:
         if self._viewport is not None:
             return self._viewport
 
+        try:
+            monitors = self._monitors()
+        except (OSError, RuntimeError, ValueError):
+            monitors = ()
         saved = self._state_store.load()
-        if saved is not None and is_rect_visible(saved, self._monitors()):
+        if saved is not None and is_rect_visible(saved, monitors):
             self._viewport = saved
         else:
-            self._viewport = self._default_rect()
+            try:
+                self._viewport = self._default_rect()
+            except (OSError, RuntimeError, ValueError):
+                self._viewport = EMERGENCY_VIEWPORT
         return self._viewport
 
     def align(self, window: WindowInfo) -> bool:

@@ -9,6 +9,8 @@ from glory_boot.adapters.win32 import (
     WindowInfo,
     Win32Error,
     client_screen_rect,
+    cursor_work_area,
+    monitor_work_areas,
     select_codex_window,
     set_window_rect,
 )
@@ -147,6 +149,41 @@ class FakeUser32:
         self.position = (x, y, width, height)
         return 1
 
+    def GetCursorPos(self, pointer: object) -> int:
+        point = pointer._obj  # type: ignore[attr-defined]
+        point.x = -100
+        point.y = 50
+        return 1
+
+    def MonitorFromPoint(self, point: object, flags: int) -> int:
+        assert flags == win32.MONITOR_DEFAULTTONEAREST
+        return 2
+
+    def GetMonitorInfoW(self, monitor: int, pointer: object) -> int:
+        info = pointer._obj  # type: ignore[attr-defined]
+        if monitor == 2:
+            info.rcWork.left = -1920
+            info.rcWork.top = 0
+            info.rcWork.right = 0
+            info.rcWork.bottom = 1040
+        else:
+            info.rcWork.left = 0
+            info.rcWork.top = 0
+            info.rcWork.right = 2560
+            info.rcWork.bottom = 1400
+        return 1
+
+    def EnumDisplayMonitors(
+        self,
+        hdc: int,
+        clip: object,
+        callback: object,
+        data: int,
+    ) -> int:
+        callback(2, 0, None, 0)
+        callback(1, 0, None, 0)
+        return 1
+
 
 def test_client_screen_rect_converts_client_origin(
     monkeypatch: pytest.MonkeyPatch,
@@ -165,6 +202,18 @@ def test_set_window_rect_uses_physical_rectangle(
     set_window_rect(1001, Rect(150.4, 80.6, 800.2, 600.5))
 
     assert user32.position == (150, 81, 800, 600)
+
+
+def test_monitor_geometry_uses_win32_work_areas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win32, "_user32", FakeUser32())
+
+    assert cursor_work_area() == Rect(-1920, 0, 1920, 1040)
+    assert monitor_work_areas() == (
+        Rect(-1920, 0, 1920, 1040),
+        Rect(0, 0, 2560, 1400),
+    )
 
 
 def test_window_geometry_rejects_invalid_inputs() -> None:

@@ -4,6 +4,8 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 
+from glory_boot.domain.models import Rect
+from glory_boot.ui.application import present_initial_window
 from glory_boot.ui.boot_window import BootWindow
 
 
@@ -113,3 +115,55 @@ def test_window_fade_out_is_animated_and_invokes_completion(qapp) -> None:
     assert completed == [None]
     assert window.windowOpacity() <= 0.01
     window.close()
+
+
+class PresentationWindow:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def winId(self) -> int:
+        self.calls.append("winId")
+        return 900
+
+    def show(self) -> None:
+        self.calls.append("show")
+
+
+class Placement:
+    def initial_viewport(self) -> Rect:
+        return Rect(-1200, 40, 1400, 820)
+
+
+class PresentationApplication:
+    def processEvents(self) -> None:
+        self.calls.append("processEvents")
+
+
+class PresentationTimer:
+    def mark(self, name: str) -> None:
+        self.calls.append(f"mark:{name}")
+
+
+def test_present_initial_window_places_before_showing(qapp) -> None:
+    window = PresentationWindow()
+    application = PresentationApplication()
+    application.calls = window.calls
+    timer = PresentationTimer()
+    timer.calls = window.calls
+    placed: list[tuple[int, Rect]] = []
+
+    present_initial_window(
+        window=window,
+        placement=Placement(),
+        place_window=lambda hwnd, rect: placed.append((hwnd, rect)),
+        qt_app=application,
+        timer=timer,
+    )
+
+    assert placed == [(900, Rect(-1200, 40, 1400, 820))]
+    assert window.calls == [
+        "winId",
+        "show",
+        "processEvents",
+        "mark:window_visible",
+    ]
