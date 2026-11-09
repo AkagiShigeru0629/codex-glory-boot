@@ -266,6 +266,21 @@ def test_session_plays_animation_to_end_before_waiting_for_codex() -> None:
     assert len(hold_events) == 1
 
 
+def test_deferred_media_starts_only_when_revealed() -> None:
+    controller, media, launcher, _window, _now = _session()
+
+    controller.start(defer_media=True)
+    assert launcher.called.wait(timeout=1)
+    assert media.opened_path is None
+    assert media.play_calls == 0
+
+    controller.begin_media()
+    controller.begin_media()
+
+    assert media.opened_path == "startup.mp4"
+    assert media.play_calls == 1
+
+
 def test_window_probe_can_run_without_blocking_the_ui_thread() -> None:
     release = Event()
 

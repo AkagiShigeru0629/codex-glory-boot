@@ -404,6 +404,27 @@ class PresentationTimer:
         self.calls.append(f"mark:{name}")
 
 
+class RevealWindow(PresentationWindow):
+    def attach_media(self, _media: object) -> None:
+        self.calls.append("attach_media")
+
+
+class RevealSession:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def begin_media(self) -> None:
+        self.calls.append("begin_media")
+
+
+class StopTimer:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def stop(self) -> None:
+        self.calls.append("stop_timer")
+
+
 def test_present_initial_window_places_before_showing(qapp) -> None:
     window = PresentationWindow()
     application = PresentationApplication()
@@ -464,3 +485,34 @@ def test_existing_codex_is_focused_before_launcher_is_shown(
     assert application._focus_existing_codex() is True
     assert focused == [4321]
     assert "show" not in application.window.calls
+
+
+def test_reveal_places_target_before_showing_and_starting_media(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    window = RevealWindow()
+    window.calls = calls
+    application = object.__new__(LauncherApplication)
+    application.window = window
+    application._placement = Placement()
+    application._qt_app = PresentationApplication()
+    application._qt_app.calls = calls
+    application._timer = PresentationTimer()
+    application._timer.calls = calls
+    application.media = object()
+    application.session = RevealSession(calls)
+    application._reveal_timer = StopTimer(calls)
+    application._window_visible = False
+    monkeypatch.setattr(
+        application_module,
+        "set_window_rect",
+        lambda _hwnd, _rect: calls.append("place"),
+    )
+
+    application._reveal_window()
+
+    assert calls.index("place") < calls.index("show")
+    assert calls.index("show") < calls.index("attach_media")
+    assert calls.index("attach_media") < calls.index("begin_media")
+    assert application._window_visible is True

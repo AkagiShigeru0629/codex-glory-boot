@@ -159,6 +159,7 @@ class SessionController(QObject):
             Future[tuple[WindowInfo | None, bool]] | None
         ) = None
         self._started = False
+        self._media_started = False
         self._handing_off = False
         self._holding = False
         self._hold_started_at = 0.0
@@ -178,18 +179,30 @@ class SessionController(QObject):
         self.media.finished.connect(self._on_media_finished)
         self.media.position_changed.connect(self._on_media_position_changed)
 
-    def start(self) -> None:
+    def start(self, *, defer_media: bool = False) -> None:
         if self._started:
             return
         self._started = True
-        self.media.open(self.config.video_path)
-        if self._stage_timer is not None:
-            self._stage_timer.mark("media_requested")
-        self.media.play()
+
+        if not defer_media:
+            self._start_media()
         self._ensure_launch_requested()
         if self._schedule_timer:
             self._timer.start()
         self.tick()
+
+    def begin_media(self) -> None:
+        self._start_media()
+        self.tick()
+
+    def _start_media(self) -> None:
+        if self._media_started or self._handing_off:
+            return
+        self._media_started = True
+        self.media.open(self.config.video_path)
+        if self._stage_timer is not None:
+            self._stage_timer.mark("media_requested")
+        self.media.play()
 
     def tick(self) -> None:
         if not self._started or self._handing_off:

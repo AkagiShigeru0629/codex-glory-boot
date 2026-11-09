@@ -245,6 +245,10 @@ class LauncherApplication:
             lambda: self._timer.mark("media_first_frame")
         )
         self._benchmark = benchmark
+        self._window_visible = False
+        self._reveal_timer = QTimer(self.window)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.timeout.connect(self._reveal_window)
         self.skin = build_skin_controller(
             config,
             root=root,
@@ -261,17 +265,36 @@ class LauncherApplication:
         )
 
     def _align_target_window(self, window: WindowInfo) -> None:
+        if self._window_visible:
+            return
         aligned = self._placement.align(window)
         self._target_aligned = aligned
         self._timer.mark(
             "window_aligned" if aligned else "window_align_failed"
         )
+        if not self._window_visible:
+            self._reveal_window()
 
     def _remember_placement(self) -> None:
         if self._target_aligned and self._placement.remember_success():
             self._timer.mark("window_geometry_saved")
         elif self._target_aligned:
             self._timer.mark("window_geometry_save_failed")
+
+    def _reveal_window(self) -> None:
+        if self._window_visible:
+            return
+        self._reveal_timer.stop()
+        present_initial_window(
+            window=self.window,
+            placement=self._placement,
+            place_window=set_window_rect,
+            qt_app=self._qt_app,
+            timer=self._timer,
+        )
+        self.window.attach_media(self.media)
+        self.session.begin_media()
+        self._window_visible = True
 
     def _focus_existing_codex(self) -> bool:
         try:
@@ -323,16 +346,12 @@ class LauncherApplication:
                 return 0
 
             self.window.show_poster_first(self._config.poster_path)
-            present_initial_window(
-                window=self.window,
-                placement=self._placement,
-                place_window=set_window_rect,
-                qt_app=self._qt_app,
-                timer=self._timer,
-            )
-            self.window.attach_media(self.media)
-
-            self.session.start()
+            if benchmark:
+                self._reveal_window()
+                self.session.start()
+            else:
+                self.session.start(defer_media=True)
+                self._reveal_timer.start(5000)
             if benchmark:
                 QTimer.singleShot(1500, self._qt_app.quit)
             try:
