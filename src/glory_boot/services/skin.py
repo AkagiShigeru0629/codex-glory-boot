@@ -461,6 +461,7 @@ class SkinController(QObject):
                 return
             if value is True:
                 self._health_check_pending = False
+                self._recovery_attempts = 0
                 return
             if self._cdp is None or self._payload is None:
                 self._finish(SkinState.FAILED, "skin_payload_missing")

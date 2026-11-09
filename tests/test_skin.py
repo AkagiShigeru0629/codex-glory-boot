@@ -391,6 +391,65 @@ def test_connection_close_after_install_rediscovers_page(
     controller.close()
 
 
+def test_healthy_reconnection_resets_recovery_budget(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    clients = [FakeCdp()]
+    controller, _cdp = _skin_controller(tmp_path, cdp=clients[0])
+
+    def create_cdp() -> FakeCdp:
+        client = FakeCdp()
+        clients.append(client)
+        return client
+
+    controller._cdp_factory = create_cdp
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    for _attempt in range(4):
+        controller._on_cdp_failed("connection_closed")
+        assert controller.state is SkinState.WAITING
+        _wait_for_state(qapp, controller, SkinState.INSTALLED)
+        controller._check_installed_skin()
+        for _ in range(30):
+            if not controller._health_check_pending:
+                break
+            QTest.qWait(10)
+            qapp.processEvents()
+        assert controller._health_check_pending is False
+
+    assert len(clients) == 6
+    assert controller.state is SkinState.INSTALLED
+    controller.close()
+
+
+def test_recovery_stops_after_three_unhealthy_reconnects(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    clients = [FakeCdp()]
+    controller, _cdp = _skin_controller(tmp_path, cdp=clients[0])
+
+    def create_cdp() -> FakeCdp:
+        client = FakeCdp()
+        clients.append(client)
+        return client
+
+    controller._cdp_factory = create_cdp
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    for _attempt in range(controller.MAX_RECOVERY_ATTEMPTS):
+        controller._on_cdp_failed("connection_closed")
+        _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    controller._on_cdp_failed("connection_closed")
+
+    assert controller.state is SkinState.FAILED
+    controller.close()
+
+
 def test_user_restore_stops_health_monitoring(
     qapp,
     tmp_path: Path,

@@ -8,6 +8,7 @@ from glory_boot.adapters.win32 import WindowInfo
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
+    FallbackProcessBackend,
     LaunchResult,
     QProcessBackend,
 )
@@ -161,12 +162,20 @@ def test_window_probe_exception_returns_structured_failure() -> None:
 
 
 class RecordingBackend:
-    def __init__(self, *, process_id: int) -> None:
+    def __init__(
+        self,
+        *,
+        process_id: int | None,
+        error: Exception | None = None,
+    ) -> None:
         self.process_id = process_id
+        self.error = error
         self.calls: list[tuple[str, str]] = []
 
-    def launch(self, app_id: str, arguments: str = "") -> int:
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
         self.calls.append((app_id, arguments))
+        if self.error is not None:
+            raise self.error
         return self.process_id
 
 
@@ -185,6 +194,43 @@ def test_launcher_passes_arguments_and_returns_process_id() -> None:
         ("OpenAI.Codex_2p2nqsd0c76g0!App", "--remote-debugging-port=50123")
     ]
     assert result.launched_pid == 9876
+
+
+def test_fallback_backend_keeps_primary_activation_result() -> None:
+    primary = RecordingBackend(process_id=9876)
+    fallback = RecordingBackend(process_id=None)
+    backend = FallbackProcessBackend(primary, fallback)
+
+    result = backend.launch(
+        "OpenAI.Codex_2p2nqsd0c76g0!App",
+        "--remote-debugging-port=50123",
+    )
+
+    assert result == 9876
+    assert fallback.calls == []
+
+
+def test_fallback_backend_uses_normal_launch_after_activation_failure() -> None:
+    primary = RecordingBackend(
+        process_id=None,
+        error=OSError("activation failed"),
+    )
+    fallback = RecordingBackend(process_id=None)
+    backend = FallbackProcessBackend(primary, fallback)
+
+    result = backend.launch(
+        "OpenAI.Codex_2p2nqsd0c76g0!App",
+        "--remote-debugging-port=50123",
+    )
+
+    assert result is None
+    assert primary.calls == [
+        (
+            "OpenAI.Codex_2p2nqsd0c76g0!App",
+            "--remote-debugging-port=50123",
+        )
+    ]
+    assert fallback.calls == [("OpenAI.Codex_2p2nqsd0c76g0!App", "")]
 
 
 def test_shell_backend_rejects_activation_arguments(

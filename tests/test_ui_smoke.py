@@ -9,7 +9,7 @@ import glory_boot.ui.application as application_module
 from glory_boot.adapters.win32 import WindowInfo
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
 from glory_boot.domain.skin import SkinProfile
-from glory_boot.services.codex_launcher import LaunchResult
+from glory_boot.services.codex_launcher import FallbackProcessBackend, LaunchResult
 from glory_boot.ui.application import (
     LauncherApplication,
     REVEAL_FALLBACK_MS,
@@ -161,21 +161,41 @@ def test_skin_without_wallpaper_does_not_open_debug_port() -> None:
 
 
 class RecordingProcessBackend:
-    pass
+    def __init__(self, *, process_id: int | None = None) -> None:
+        self.process_id = process_id
+        self.calls: list[tuple[str, str]] = []
+
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
+        self.calls.append((app_id, arguments))
+        return self.process_id
 
 
-def test_process_backend_uses_activation_only_for_enabled_skin() -> None:
+def test_process_backend_wraps_activation_with_shell_fallback() -> None:
     created: list[str] = []
+    activation = RecordingProcessBackend(process_id=9876)
+    shell = RecordingProcessBackend()
 
     backend = build_process_backend(
         benchmark=False,
         skin_enabled=True,
         activation_factory=lambda: created.append("activation")
-        or RecordingProcessBackend(),
+        or activation,
+        fallback_factory=lambda: shell,
     )
 
-    assert isinstance(backend, RecordingProcessBackend)
+    assert isinstance(backend, FallbackProcessBackend)
     assert created == ["activation"]
+    assert backend.launch(
+        "OpenAI.Codex_2p2nqsd0c76g0!App",
+        "--remote-debugging-port=50123",
+    ) == 9876
+    assert activation.calls == [
+        (
+            "OpenAI.Codex_2p2nqsd0c76g0!App",
+            "--remote-debugging-port=50123",
+        )
+    ]
+    assert shell.calls == []
     assert build_process_backend(
         benchmark=False,
         skin_enabled=False,

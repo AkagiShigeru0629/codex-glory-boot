@@ -28,9 +28,11 @@ from glory_boot.domain.policy import HandoffReason
 from glory_boot.domain.skin import SkinProfile, select_skin_profile
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
+    FallbackProcessBackend,
     LaunchResult,
     NoopProcessBackend,
     ProcessBackend,
+    QProcessBackend,
 )
 from glory_boot.services.codex_readiness import CodexReadinessProbe
 from glory_boot.services.media import MediaController
@@ -116,12 +118,16 @@ def build_process_backend(
     activation_factory: Callable[[], ProcessBackend] = (
         ApplicationActivationBackend
     ),
+    fallback_factory: Callable[[], ProcessBackend] = QProcessBackend,
 ) -> ProcessBackend | None:
     """按启动模式选择无副作用、调试激活或普通 Shell 后端。"""
     if benchmark:
         return noop_factory()
     if skin_enabled:
-        return activation_factory()
+        return FallbackProcessBackend(
+            activation_factory(),
+            fallback_factory(),
+        )
     return None
 
 

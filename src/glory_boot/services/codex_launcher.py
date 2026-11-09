@@ -41,6 +41,24 @@ class NoopProcessBackend:
         return None
 
 
+class FallbackProcessBackend:
+    """调试激活失败时改用不带参数的原生 Shell 启动。"""
+
+    def __init__(
+        self,
+        primary: ProcessBackend,
+        fallback: ProcessBackend,
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    def launch(self, app_id: str, arguments: str = "") -> int | None:
+        try:
+            return self._primary.launch(app_id, arguments)
+        except Exception:
+            return self._fallback.launch(app_id, "")
+
+
 @dataclass(frozen=True, slots=True)
 class LaunchResult:
     launch_requested: bool
