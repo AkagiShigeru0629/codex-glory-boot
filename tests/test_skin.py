@@ -26,6 +26,7 @@ PAYLOAD = SkinPayload(
     install_expression="install()",
     detect_expression="detect()",
     restore_expression="restore()",
+    monitor_expression="monitor()",
 )
 
 
@@ -40,18 +41,30 @@ class FakeCdp(QObject):
         capability_value: bool = True,
         install_value: object = True,
         detect_value: object = True,
+        monitor_value: object = True,
     ) -> None:
         super().__init__()
         self.capability_value = capability_value
         self.install_value = install_value
         self.detect_value = detect_value
+        self.monitor_value = monitor_value
         self.connect_calls: list[tuple[str, int]] = []
         self.evaluation_calls: list[tuple[str, int, int]] = []
         self.close_calls = 0
+        self._closed = False
 
     def connect_to(self, websocket_url: str, timeout_ms: int = 5000) -> None:
+        self._closed = False
         self.connect_calls.append((websocket_url, timeout_ms))
-        QTimer.singleShot(0, self.connected.emit)
+        QTimer.singleShot(0, self._emit_connected)
+
+    def _emit_connected(self) -> None:
+        if not self._closed:
+            self.connected.emit()
+
+    def _emit_result(self, request_id: int, result: object) -> None:
+        if not self._closed:
+            self.evaluation_finished.emit(request_id, result)
 
     def evaluate(
         self,
@@ -64,6 +77,8 @@ class FakeCdp(QObject):
             value = self.capability_value
         elif request_id == 2:
             value = self.install_value
+        elif request_id == 5:
+            value = self.monitor_value
         else:
             value = self.detect_value
         if request_id == 4:
@@ -76,10 +91,11 @@ class FakeCdp(QObject):
         }
         QTimer.singleShot(
             0,
-            lambda: self.evaluation_finished.emit(request_id, result),
+            lambda: self._emit_result(request_id, result),
         )
 
     def close(self) -> None:
+        self._closed = True
         self.close_calls += 1
 
 
@@ -372,6 +388,46 @@ def test_connection_close_after_install_rediscovers_page(
 
     assert second.connect_calls == [(PAGE.websocket_url, 20)]
     _wait_for_state(qapp, controller, SkinState.INSTALLED)
+    controller.close()
+
+
+def test_user_restore_stops_health_monitoring(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    cdp = FakeCdp(monitor_value="disabled")
+    controller, _cdp = _skin_controller(tmp_path, cdp=cdp)
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    controller._check_installed_skin()
+    _wait_for_state(qapp, controller, SkinState.RESTORED)
+
+    assert cdp.close_calls == 1
+    controller.close()
+
+
+def test_connection_failure_during_restore_does_not_reinject(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    cdp = FakeCdp()
+    controller, _cdp = _skin_controller(tmp_path, cdp=cdp)
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+    install_count = sum(
+        1 for _expression, request_id, _timeout in cdp.evaluation_calls
+        if request_id == 2
+    )
+
+    controller.restore()
+    controller._on_cdp_failed("connection_closed")
+    _wait_for_state(qapp, controller, SkinState.FAILED)
+
+    assert sum(
+        1 for _expression, request_id, _timeout in cdp.evaluation_calls
+        if request_id == 2
+    ) == install_count
     controller.close()
 
 

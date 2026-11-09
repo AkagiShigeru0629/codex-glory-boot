@@ -19,6 +19,23 @@ _DETECT_EXPRESSION = """(() => {
 _RESTORE_EXPRESSION = """(() => {
     return globalThis.__gloryBootSkin?.dispose() ?? true;
 })()"""
+_MONITOR_EXPRESSION = """(() => {
+    if (
+        document.documentElement.getAttribute(
+            "data-glory-boot-skin-disabled"
+        ) === "true"
+    ) {
+        return "disabled";
+    }
+    const state = globalThis.__gloryBootSkin;
+    return Boolean(
+        state?.installed &&
+        state?.wallpaperUrl &&
+        document.getElementById("glory-boot-skin-style") &&
+        document.documentElement.getAttribute("data-glory-boot-skin") === "active" &&
+        getComputedStyle(document.body).backgroundImage.includes("blob:")
+    );
+})()"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +43,7 @@ class SkinPayload:
     install_expression: str
     detect_expression: str
     restore_expression: str
+    monitor_expression: str
 
 
 def _wallpaper_mime(data: bytes) -> str:
@@ -73,4 +91,5 @@ def build_skin_payload(root: Path, wallpaper_path: str) -> SkinPayload:
         install_expression=install,
         detect_expression=_DETECT_EXPRESSION,
         restore_expression=_RESTORE_EXPRESSION,
+        monitor_expression=_MONITOR_EXPRESSION,
     )

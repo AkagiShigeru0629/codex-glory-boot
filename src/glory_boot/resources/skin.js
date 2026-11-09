@@ -65,6 +65,7 @@
             event.preventDefault();
             event.stopImmediatePropagation();
             dispose();
+            root.setAttribute("data-glory-boot-skin-disabled", "true");
         }
     };
 

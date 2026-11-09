@@ -106,6 +106,7 @@ class SkinController(QObject):
     DETECT_REQUEST = 3
     RESTORE_REQUEST = 4
     MONITOR_REQUEST = 5
+    MAX_RECOVERY_ATTEMPTS = 3
     CAPABILITY_RETRY_LIMIT = 5
 
     def __init__(
@@ -177,6 +178,7 @@ class SkinController(QObject):
         self._restore_after_failure = False
         self._health_check_pending = False
         self._recovering = False
+        self._recovery_attempts = 0
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(interval_ms)
         self._poll_timer.timeout.connect(self._poll)
@@ -453,7 +455,11 @@ class SkinController(QObject):
             return
 
         if request_id == self.MONITOR_REQUEST:
-            if _value_from_result(result) is True:
+            value = _value_from_result(result)
+            if value == "disabled":
+                self._finish(SkinState.RESTORED, "skin_restored")
+                return
+            if value is True:
                 self._health_check_pending = False
                 return
             if self._cdp is None or self._payload is None:
@@ -478,20 +484,24 @@ class SkinController(QObject):
             return
         if not reason:
             reason = "unknown"
+        if self._phase == "restore":
+            self._finish(SkinState.FAILED, "skin_restore_failed")
+            return
         if self._state is SkinState.INSTALLED:
             self._begin_recovery()
             return
         if self._phase in {"install", "detect"}:
             self._restore_then_fail(f"skin_cdp_{reason}")
             return
-        if self._phase == "restore":
-            self._finish(SkinState.FAILED, "skin_restore_failed")
-            return
         self._finish(SkinState.FAILED, f"skin_cdp_{reason}")
 
     def _begin_recovery(self) -> None:
         if self._closed or self._reconnect_timer.isActive():
             return
+        if self._recovery_attempts >= self.MAX_RECOVERY_ATTEMPTS:
+            self._finish(SkinState.FAILED, "skin_reconnect_exhausted")
+            return
+        self._recovery_attempts += 1
         self._monitor_timer.stop()
         self._set_state(SkinState.WAITING)
         self._mark("skin_reload_waiting")
@@ -523,11 +533,14 @@ class SkinController(QObject):
         )
 
     def _activate_installed(self, marker: str) -> None:
+        recovering = self._recovering
         self._set_state(SkinState.INSTALLED)
-        self._mark("skin_reinstalled" if self._recovering else marker)
+        self._mark("skin_reinstalled" if recovering else marker)
         self._poll_timer.stop()
         self._phase = "installed"
         self._health_check_pending = False
+        if not recovering:
+            self._recovery_attempts = 0
         self._recovering = False
         self._reconnect_timer.stop()
         self._monitor_timer.start()
@@ -544,7 +557,7 @@ class SkinController(QObject):
         self._health_check_pending = True
         self._phase = "monitor"
         self._cdp.evaluate(
-            self._payload.detect_expression,
+            self._payload.monitor_expression,
             self.MONITOR_REQUEST,
             self._evaluate_timeout_ms,
         )
