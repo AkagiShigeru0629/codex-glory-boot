@@ -1,0 +1,163 @@
+from dataclasses import replace
+
+import pytest
+
+from glory_boot.adapters.dwm import DwmController
+from glory_boot.adapters.win32 import (
+    RawWindowRecord,
+    WindowInfo,
+    select_codex_window,
+)
+from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
+
+
+@pytest.fixture
+def config() -> AppConfig:
+    return AppConfig(
+        app_id="OpenAI.Codex_2p2nqsd0c76g0!App",
+        process_names=("Codex.exe",),
+        process_path_fragment="OpenAI.Codex_",
+        video_path="startup.mp4",
+        poster_path="poster.png",
+        duration=8.0,
+        hold_at=6.3,
+        transition_start=6.8,
+        transition_end=7.6,
+        max_wait_seconds=60.0,
+        volume=0.35,
+        screen_frames=(
+            ScreenFrame(0.0, Rect(0.3, 0.2, 0.4, 0.6), 0.75),
+            ScreenFrame(7.6, Rect(0.0, 0.0, 1.0, 1.0), 1.0),
+        ),
+    )
+
+
+def _valid_record() -> RawWindowRecord:
+    return RawWindowRecord(
+        hwnd=1001,
+        pid=4242,
+        class_name="Chrome_WidgetWin_1",
+        visible=True,
+        cloaked=False,
+        tool_window=False,
+        process_path=(
+            r"C:\Program Files\WindowsApps"
+            r"\OpenAI.Codex_2p2nqsd0c76g0\Codex.exe"
+        ),
+        client_rect=Rect(0, 0, 1280, 800),
+        responsive=True,
+    )
+
+
+def test_select_codex_window_accepts_unique_stable_record(
+    config: AppConfig,
+) -> None:
+    result = select_codex_window(config, [_valid_record()])
+
+    assert result == WindowInfo(
+        hwnd=1001,
+        pid=4242,
+        process_path=(
+            r"C:\Program Files\WindowsApps"
+            r"\OpenAI.Codex_2p2nqsd0c76g0\Codex.exe"
+        ),
+        client_rect=Rect(0, 0, 1280, 800),
+        responsive=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"visible": False},
+        {"cloaked": True},
+        {"tool_window": True},
+        {"class_name": "Chrome_WidgetWin_0"},
+        {"process_path": r"C:\Other\Codex.exe"},
+        {"client_rect": Rect(0, 0, 449, 800)},
+        {"client_rect": Rect(0, 0, 1280, 279)},
+        {"responsive": False},
+    ],
+)
+def test_select_codex_window_rejects_ineligible_record(
+    config: AppConfig,
+    change: dict[str, object],
+) -> None:
+    invalid = replace(_valid_record(), **change)
+
+    assert select_codex_window(config, [invalid]) is None
+
+
+def test_select_codex_window_rejects_wrong_process_name(
+    config: AppConfig,
+) -> None:
+    invalid = replace(
+        _valid_record(),
+        process_path=r"C:\Apps\NotCodex.exe",
+    )
+
+    assert select_codex_window(config, [invalid]) is None
+
+
+def test_select_codex_window_rejects_multiple_matches(
+    config: AppConfig,
+) -> None:
+    duplicate = replace(_valid_record(), hwnd=1002, pid=4243)
+
+    assert select_codex_window(
+        config,
+        [_valid_record(), duplicate],
+    ) is None
+
+
+class FakeDwmBackend:
+    def __init__(self) -> None:
+        self.register_calls: list[int] = []
+        self.update_calls: list[tuple[int, Rect, int, bool]] = []
+        self.unregister_calls: list[int] = []
+
+    def register_thumbnail(self, destination_hwnd: int, source_hwnd: int) -> int:
+        assert destination_hwnd == 900
+        self.register_calls.append(source_hwnd)
+        return 77
+
+    def update_thumbnail(
+        self,
+        thumbnail: int,
+        destination: Rect,
+        opacity: int,
+        visible: bool,
+    ) -> None:
+        self.update_calls.append((thumbnail, destination, opacity, visible))
+
+    def unregister_thumbnail(self, thumbnail: int) -> None:
+        self.unregister_calls.append(thumbnail)
+
+
+def test_dwm_controller_registers_once_and_converts_opacity() -> None:
+    backend = FakeDwmBackend()
+    controller = DwmController(destination_hwnd=900, backend=backend)
+
+    controller.register(1001)
+    controller.register(1002)
+    controller.update(
+        destination=Rect(10, 20, 300, 200),
+        opacity=0.5,
+        visible=True,
+    )
+
+    assert backend.register_calls == [1001]
+    assert backend.update_calls == [
+        (77, Rect(10, 20, 300, 200), 128, True),
+    ]
+
+
+def test_dwm_controller_close_is_idempotent_and_releases_once() -> None:
+    backend = FakeDwmBackend()
+    controller = DwmController(destination_hwnd=900, backend=backend)
+    controller.register(1001)
+
+    controller.close()
+    controller.close()
+
+    assert backend.unregister_calls == [77]

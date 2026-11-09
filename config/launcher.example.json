@@ -1,0 +1,48 @@
+{
+  "app_id": "OpenAI.Codex_2p2nqsd0c76g0!App",
+  "process_names": [
+    "ChatGPT.exe",
+    "Codex.exe"
+  ],
+  "process_path_fragment": "OpenAI.Codex_",
+  "video_path": "media/startup.mp4",
+  "poster_path": "media/poster.png",
+  "duration": 8.0,
+  "hold_at": 6.4,
+  "transition_start": 6.7,
+  "transition_end": 7.6,
+  "max_wait_seconds": 60.0,
+  "volume": 0.35,
+  "screen_frames": [
+    {
+      "time": 0.0,
+      "rect": {
+        "x": 0.36,
+        "y": 0.18,
+        "width": 0.28,
+        "height": 0.64
+      },
+      "opacity": 0.75
+    },
+    {
+      "time": 6.7,
+      "rect": {
+        "x": 0.28,
+        "y": 0.12,
+        "width": 0.44,
+        "height": 0.76
+      },
+      "opacity": 0.95
+    },
+    {
+      "time": 7.6,
+      "rect": {
+        "x": 0.0,
+        "y": 0.0,
+        "width": 1.0,
+        "height": 1.0
+      },
+      "opacity": 1.0
+    }
+  ]
+}
