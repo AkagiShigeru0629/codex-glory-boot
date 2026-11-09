@@ -1,5 +1,7 @@
 import ctypes
 import math
+import socket
+import struct
 from collections.abc import Iterable
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -18,6 +20,9 @@ SW_RESTORE = 9
 HWND_TOPMOST = -1
 SWP_NOACTIVATE = 0x0010
 MONITOR_DEFAULTTONEAREST = 2
+AF_INET = 2
+TCP_TABLE_OWNER_PID_LISTENER = 3
+ERROR_INSUFFICIENT_BUFFER = 122
 MIN_CLIENT_WIDTH = 450
 MIN_CLIENT_HEIGHT = 280
 CODEX_WINDOW_CLASS = "Chrome_WidgetWin_1"
@@ -74,9 +79,21 @@ class MONITORINFO(ctypes.Structure):
     ]
 
 
+class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+    _fields_ = [
+        ("dwState", wintypes.DWORD),
+        ("dwLocalAddr", wintypes.DWORD),
+        ("dwLocalPort", wintypes.DWORD),
+        ("dwRemoteAddr", wintypes.DWORD),
+        ("dwRemotePort", wintypes.DWORD),
+        ("dwOwningPid", wintypes.DWORD),
+    ]
+
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
+_iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
 
 _WNDENUMPROC = ctypes.WINFUNCTYPE(
     wintypes.BOOL,
@@ -182,6 +199,15 @@ _dwmapi.DwmGetWindowAttribute.argtypes = [
     wintypes.DWORD,
 ]
 _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+_iphlpapi.GetExtendedTcpTable.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(wintypes.DWORD),
+    wintypes.BOOL,
+    wintypes.ULONG,
+    ctypes.c_int,
+    wintypes.ULONG,
+]
+_iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
 
 
 def _process_path(pid: int) -> str:
@@ -320,6 +346,57 @@ def monitor_work_areas() -> tuple[Rect, ...]:
     if not _user32.EnumDisplayMonitors(0, None, collect, 0):
         raise Win32Error("枚举显示器工作区失败")
     return tuple(areas)
+
+
+def _listener_owner_pid_from_table(table: bytes, port: int) -> int | None:
+    row_size = ctypes.sizeof(MIB_TCPROW_OWNER_PID)
+    if len(table) < 4:
+        return None
+    count = struct.unpack_from("<I", table, 0)[0]
+    if count == 0 or len(table) < 4 + count * row_size:
+        return None
+
+    owners: set[int] = set()
+    for index in range(count):
+        row = MIB_TCPROW_OWNER_PID.from_buffer_copy(
+            table,
+            4 + index * row_size,
+        )
+        local_port = socket.ntohs(row.dwLocalPort & 0xFFFF)
+        if local_port == port:
+            owners.add(int(row.dwOwningPid))
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
+def listener_owner_pid(port: int) -> int | None:
+    """返回唯一持有指定 TCP 监听端口的进程号。"""
+    if not 0 < port <= 65535:
+        return None
+
+    size = wintypes.DWORD()
+    result = _iphlpapi.GetExtendedTcpTable(
+        None,
+        ctypes.byref(size),
+        False,
+        AF_INET,
+        TCP_TABLE_OWNER_PID_LISTENER,
+        0,
+    )
+    if result not in {0, ERROR_INSUFFICIENT_BUFFER} or size.value < 4:
+        return None
+
+    buffer = ctypes.create_string_buffer(size.value)
+    result = _iphlpapi.GetExtendedTcpTable(
+        buffer,
+        ctypes.byref(size),
+        False,
+        AF_INET,
+        TCP_TABLE_OWNER_PID_LISTENER,
+        0,
+    )
+    if result != 0:
+        return None
+    return _listener_owner_pid_from_table(buffer.raw[: size.value], port)
 
 
 def _is_cloaked(hwnd: int) -> bool:
