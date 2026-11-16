@@ -3,6 +3,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,3 +105,19 @@ def test_skin_resources_are_packaged_with_qt_websockets() -> None:
     assert '"glory_boot/resources"' in spec_text
     assert '"wallpaper.jpg"' in spec_text
     assert not (ROOT / "package.json").exists()
+
+
+def test_launcher_icon_contains_windows_sizes_and_is_embedded() -> None:
+    icon_path = ROOT / "assets" / "app-icon.ico"
+    assert icon_path.is_file()
+
+    with Image.open(icon_path) as icon:
+        sizes = icon.info["sizes"]
+
+    assert {(16, 16), (24, 24), (32, 32), (48, 48)} <= sizes
+    assert (256, 256) in sizes
+
+    spec_text = (ROOT / "packaging" / "glory_boot.spec").read_text(
+        encoding="utf-8"
+    )
+    assert 'icon=str(project_root / "assets" / "app-icon.ico")' in spec_text

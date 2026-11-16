@@ -82,6 +82,8 @@ def check_package() -> None:
         ("media", "startup.mp4"),
         ("media", "poster.png"),
         ("media", "wallpaper.jpg"),
+        ("assets", "app-icon.png"),
+        ("assets", "app-icon.ico"),
         ("config", "launcher.example.json"),
         ("LICENSE",),
         ("THIRD_PARTY_NOTICES.md",),

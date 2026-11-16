@@ -11,6 +11,8 @@ if (-not (Test-Path -LiteralPath $Python)) {
     throw "Project virtual environment not found. Run scripts/bootstrap.ps1 first."
 }
 foreach ($Required in @(
+    "assets\app-icon.ico",
+    "assets\app-icon.png",
     "media\startup.mp4",
     "media\poster.png",
     "media\wallpaper.jpg",
@@ -32,8 +34,10 @@ try {
     $OutputRoot = Join-Path $ProjectRoot "dist\GloryCodexBoot"
     $ConfigOutput = Join-Path $OutputRoot "config"
     $MediaOutput = Join-Path $OutputRoot "media"
+    $AssetOutput = Join-Path $OutputRoot "assets"
     New-Item -ItemType Directory -Path $ConfigOutput -Force | Out-Null
     New-Item -ItemType Directory -Path $MediaOutput -Force | Out-Null
+    New-Item -ItemType Directory -Path $AssetOutput -Force | Out-Null
     Copy-Item -LiteralPath "config\launcher.example.json" `
         -Destination $ConfigOutput -Force
     Copy-Item -LiteralPath "media\startup.mp4" `
@@ -42,6 +46,10 @@ try {
         -Destination $MediaOutput -Force
     Copy-Item -LiteralPath "media\wallpaper.jpg" `
         -Destination $MediaOutput -Force
+    Copy-Item -LiteralPath "assets\app-icon.png" `
+        -Destination $AssetOutput -Force
+    Copy-Item -LiteralPath "assets\app-icon.ico" `
+        -Destination $AssetOutput -Force
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" `
         -Destination $OutputRoot -Force
     Copy-Item -LiteralPath "LICENSE" `

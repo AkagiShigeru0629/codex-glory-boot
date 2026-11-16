@@ -16,12 +16,17 @@ if (Test-Path -LiteralPath $DistExe) {
     $Target = $DistExe
     $Arguments = ""
     $WorkingDirectory = Split-Path -Parent $DistExe
+    $IconPath = Join-Path $WorkingDirectory "assets\app-icon.ico"
 } elseif (Test-Path -LiteralPath $SourcePython) {
     $Target = $SourcePython
     $Arguments = "-m glory_boot"
     $WorkingDirectory = $ProjectRoot
+    $IconPath = Join-Path $ProjectRoot "assets\app-icon.ico"
 } else {
     throw "No packaged executable or project virtual environment was found."
+}
+if (-not (Test-Path -LiteralPath $IconPath)) {
+    throw "Launcher icon was not found: $IconPath"
 }
 
 if ([string]::IsNullOrWhiteSpace($ShortcutPath)) {
@@ -77,7 +82,7 @@ $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = $Target
 $Shortcut.Arguments = $Arguments
 $Shortcut.WorkingDirectory = $WorkingDirectory
-$Shortcut.IconLocation = "$Target,0"
+$Shortcut.IconLocation = "$IconPath,0"
 $Shortcut.Save()
 
 $Hash = (Get-FileHash -LiteralPath $ShortcutPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -85,7 +90,7 @@ $BackupData = [ordered]@{
     path = $ShortcutPath
     target = $Target
     arguments = $Arguments
-    icon = "$Target,0"
+    icon = "$IconPath,0"
     working_directory = $WorkingDirectory
     shortcut_sha256 = $Hash
     mode = $Mode

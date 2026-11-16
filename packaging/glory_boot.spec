@@ -50,6 +50,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=str(project_root / "assets" / "app-icon.ico"),
 )
 
 coll = COLLECT(

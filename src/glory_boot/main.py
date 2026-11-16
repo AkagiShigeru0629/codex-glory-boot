@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMessageBox
 
 from glory_boot.adapters.codex_runtime import (
@@ -59,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger = _configure_logging(root)
     timer = StageTimer(start=_PROCESS_START, logger=logger)
     qt_app = create_qt_application([arguments[0], *qt_arguments])
+    qt_app.setWindowIcon(QIcon(str(root / "assets" / "app-icon.png")))
     timer.mark("qt_ready")
 
     try:
