@@ -19,14 +19,14 @@ class WindowPlacementController:
         state_store: WindowStateStore,
         monitors: Callable[[], tuple[Rect, ...]],
         default_rect: Callable[[], Rect],
-        client_rect: Callable[[int], Rect],
+        target_rect: Callable[[int], Rect],
         place_window: Callable[[int, Rect], None],
     ) -> None:
         self._window_hwnd = window_hwnd
         self._state_store = state_store
         self._monitors = monitors
         self._default_rect = default_rect
-        self._client_rect = client_rect
+        self._target_rect = target_rect
         self._place_window = place_window
         self._viewport: Rect | None = None
         self._aligned_hwnd: int | None = None
@@ -55,7 +55,7 @@ class WindowPlacementController:
             return True
 
         try:
-            target = self._client_rect(window.hwnd)
+            target = self._target_rect(window.hwnd)
             if not is_rect_visible(target, self._monitors()):
                 return False
             self._place_window(self._window_hwnd(), target)

@@ -38,6 +38,7 @@ def test_required_project_metadata_exists() -> None:
     for relative_path in (
         "pyproject.toml",
         "README.md",
+        "LICENSE",
         "THIRD_PARTY_NOTICES.md",
         "scripts/bootstrap.ps1",
         "scripts/test.ps1",
@@ -54,6 +55,8 @@ def test_project_pins_python_and_install_dependencies() -> None:
     project = pyproject["project"]
 
     assert project["requires-python"] == ">=3.14,<3.15"
+    assert project["license"] == "MIT"
+    assert project["license-files"] == ["LICENSE"]
     assert project["dependencies"] == ["PySide6==6.12.0"]
     assert project["optional-dependencies"]["dev"] == [
         "pytest==9.2.0",

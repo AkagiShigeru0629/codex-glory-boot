@@ -149,6 +149,7 @@ def _skin_controller(
         timeout_ms=timeout_ms,
         connect_timeout_ms=20,
         evaluate_timeout_ms=20,
+        capability_wait_ms=100,
     )
     return controller, cdp_client
 
@@ -170,10 +171,49 @@ class DetectFailCdp(FakeCdp):
         super().evaluate(expression, request_id, timeout_ms)
 
 
+class ClosingCapabilityCdp(FakeCdp):
+    def connect_to(self, websocket_url: str, timeout_ms: int = 5000) -> None:
+        self.connect_calls.append((websocket_url, timeout_ms))
+        QTimer.singleShot(
+            0,
+            lambda: self.failed.emit("connection_closed"),
+        )
+
+
 class LateCapabilityCdp(FakeCdp):
     def __init__(self) -> None:
         super().__init__()
         self.capability_values = [False, False, True]
+
+    def evaluate(
+        self,
+        expression: str,
+        request_id: int,
+        timeout_ms: int = 5000,
+    ) -> None:
+        if request_id == 1:
+            value = self.capability_values.pop(0)
+            self.evaluation_calls.append((expression, request_id, timeout_ms))
+            QTimer.singleShot(
+                0,
+                lambda: self.evaluation_finished.emit(
+                    request_id,
+                    {
+                        "result": {
+                            "type": "boolean",
+                            "value": value,
+                        }
+                    },
+                ),
+            )
+            return
+        super().evaluate(expression, request_id, timeout_ms)
+
+
+class VeryLateCapabilityCdp(FakeCdp):
+    def __init__(self) -> None:
+        super().__init__()
+        self.capability_values = [False] * 8 + [True]
 
     def evaluate(
         self,
@@ -323,6 +363,46 @@ def test_incompatible_version_is_skipped(qapp, tmp_path: Path) -> None:
     controller.close()
 
 
+def test_process_path_is_retried_after_activation(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    process_paths: dict[int, str] = {}
+    controller, _cdp = _skin_controller(
+        tmp_path,
+        process_paths=process_paths,
+    )
+
+    controller.start(launched_pid=10)
+    process_paths[10] = (
+        r"C:\Program Files\WindowsApps"
+        rf"\OpenAI.Codex_{VERSION}_x64__x\ChatGPT.exe"
+    )
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    controller.close()
+
+
+def test_listener_identity_is_used_when_bootstrap_pid_path_is_gone(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    package_path = (
+        r"C:\Program Files\WindowsApps"
+        rf"\OpenAI.Codex_{VERSION}_x64__x\ChatGPT.exe"
+    )
+    controller, _cdp = _skin_controller(
+        tmp_path,
+        listener_pid=2996,
+        process_paths={2996: package_path},
+    )
+
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    controller.close()
+
+
 def test_successful_install_runs_detection_and_closes_cdp(
     qapp,
     tmp_path: Path,
@@ -388,6 +468,33 @@ def test_connection_close_after_install_rediscovers_page(
 
     assert second.connect_calls == [(PAGE.websocket_url, 20)]
     _wait_for_state(qapp, controller, SkinState.INSTALLED)
+    controller.close()
+
+
+def test_connection_close_during_capability_rediscovers_page(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    first = ClosingCapabilityCdp()
+    clients = [first]
+    remaining = [first]
+
+    def create_cdp() -> FakeCdp:
+        if remaining:
+            return remaining.pop(0)
+        client = FakeCdp()
+        clients.append(client)
+        return client
+
+    controller, _cdp = _skin_controller(tmp_path, cdp=first)
+    controller._cdp_factory = create_cdp
+    controller.start(launched_pid=10)
+
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    assert len(clients) == 2
+    assert first.evaluation_calls == []
+    assert [call[1] for call in clients[1].evaluation_calls] == [1, 2, 3]
     controller.close()
 
 
@@ -555,7 +662,8 @@ def test_missing_page_capability_skips_injection(
     controller.start(launched_pid=10)
     _wait_for_state(qapp, controller, SkinState.SKIPPED)
 
-    assert [call[1] for call in cdp.evaluation_calls] == [1, 1, 1, 1, 1]
+    assert len(cdp.evaluation_calls) >= 5
+    assert {call[1] for call in cdp.evaluation_calls} == {1}
     assert cdp.close_calls == 1
     controller.close()
 
@@ -571,6 +679,20 @@ def test_capability_is_retried_during_page_initialization(
     _wait_for_state(qapp, controller, SkinState.INSTALLED)
 
     assert [call[1] for call in cdp.evaluation_calls] == [1, 1, 1, 2, 3]
+    controller.close()
+
+
+def test_capability_waits_for_late_page_mount(
+    qapp,
+    tmp_path: Path,
+) -> None:
+    cdp = VeryLateCapabilityCdp()
+    controller, _cdp = _skin_controller(tmp_path, cdp=cdp)
+
+    controller.start(launched_pid=10)
+    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+
+    assert [call[1] for call in cdp.evaluation_calls] == [1] * 9 + [2, 3]
     controller.close()
 
 

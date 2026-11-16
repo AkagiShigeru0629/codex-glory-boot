@@ -112,7 +112,6 @@ def load_config(root: Path) -> AppConfig:
         video_path=_text(raw, "video_path"),
         poster_path=_text(raw, "poster_path"),
         duration=_number(raw, "duration"),
-        hold_at=_number(raw, "hold_at"),
         transition_start=_number(raw, "transition_start"),
         transition_end=_number(raw, "transition_end"),
         max_wait_seconds=_number(raw, "max_wait_seconds"),
@@ -136,7 +135,6 @@ def load_config(root: Path) -> AppConfig:
         video_path=str(video_path),
         poster_path=str(poster_path),
         duration=config.duration,
-        hold_at=config.hold_at,
         transition_start=config.transition_start,
         transition_end=config.transition_end,
         max_wait_seconds=config.max_wait_seconds,
@@ -158,7 +156,6 @@ def validate_config(config: AppConfig) -> None:
 
     numeric_values = {
         "duration": config.duration,
-        "hold_at": config.hold_at,
         "transition_start": config.transition_start,
         "transition_end": config.transition_end,
         "max_wait_seconds": config.max_wait_seconds,
@@ -169,8 +166,7 @@ def validate_config(config: AppConfig) -> None:
             raise ConfigError(f"{key} 必须是有限数值")
 
     if not (
-        0 <= config.hold_at
-        < config.transition_start
+        0 <= config.transition_start
         < config.transition_end
         < config.duration
     ):

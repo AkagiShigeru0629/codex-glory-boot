@@ -23,7 +23,6 @@ def config_root(tmp_path: Path) -> Path:
         "video_path": "media/startup.mp4",
         "poster_path": "media/poster.png",
         "duration": 8.0,
-        "hold_at": 6.4,
         "transition_start": 6.7,
         "transition_end": 7.6,
         "max_wait_seconds": 60.0,

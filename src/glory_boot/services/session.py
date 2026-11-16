@@ -18,10 +18,7 @@ from glory_boot.domain.policy import (
     HandoffPolicy,
     HandoffReason,
 )
-from glory_boot.domain.timeline import (
-    PlaybackAction,
-    evaluate_timeline,
-)
+from glory_boot.domain.timeline import transition_progress
 from glory_boot.diagnostics import StageTimer
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
@@ -29,9 +26,8 @@ from glory_boot.services.codex_launcher import (
 )
 from glory_boot.services.media import MediaController
 
-FINAL_FRAME_HOLD_SECONDS = 2.5
+FINAL_FRAME_HOLD_SECONDS = 0.2
 FINAL_FRAME_BACKOFF_SECONDS = 0.05
-WINDOW_READY_FALLBACK_SECONDS = 8.0
 FADE_OUT_DURATION_MS = 360
 LAUNCH_FAILURE_RETRY_SECONDS = 1.0
 LAUNCH_WINDOW_GRACE_SECONDS = 8.0
@@ -90,8 +86,6 @@ class SessionWindow(Protocol):
 class SessionController(QObject):
     """连接媒体、启动请求、窗口探测和交接状态。"""
 
-    hold_started = Signal()
-    hold_finished = Signal()
     handoff_started = Signal()
     handoff_completed = Signal()
     launch_result_ready = Signal(object)
@@ -104,11 +98,11 @@ class SessionController(QObject):
         media: MediaController | SessionMedia,
         window: SessionWindow,
         window_finder: Callable[[AppConfig], WindowInfo | None] = find_codex_window,
+        target_found_callback: Callable[[WindowInfo], None] | None = None,
         target_stable_callback: Callable[[WindowInfo], None] | None = None,
         dwm_factory: Callable[[int], DwmController] | None = None,
         viewport_provider: Callable[[], object] | None = None,
         exit_callback: Callable[[], None] | None = None,
-        content_ready_finder: Callable[[], bool] | None = None,
         clock: Callable[[], float] = time.monotonic,
         schedule_timer: bool = True,
         async_window_probe: bool = True,
@@ -124,6 +118,7 @@ class SessionController(QObject):
         self.media = media
         self.window = window
         self._window_finder = window_finder
+        self._target_found_callback = target_found_callback
         self._target_stable_callback = target_stable_callback
         self._dwm_factory = dwm_factory or (
             lambda destination_hwnd: DwmController(
@@ -132,7 +127,6 @@ class SessionController(QObject):
         )
         self._viewport_provider = viewport_provider
         self._exit_callback = exit_callback
-        self._content_ready_finder = content_ready_finder or (lambda: True)
         self._clock = clock
         self._schedule_timer = schedule_timer
         self._async_window_probe = async_window_probe
@@ -152,24 +146,21 @@ class SessionController(QObject):
         self._launch_future: Future[LaunchResult] | None = None
         self._launch_result_emitted = False
         self._launch_attempts = 0
+        self._expected_pid: int | None = None
         self._launch_accepted_at: float | None = None
         self._launch_retry_at: float | None = None
         self._launch_confirmed = False
-        self._probe_future: (
-            Future[tuple[WindowInfo | None, bool]] | None
-        ) = None
+        self._probe_future: Future[WindowInfo | None] | None = None
         self._started = False
+        self._started_at = 0.0
         self._media_started = False
         self._handing_off = False
-        self._holding = False
-        self._hold_started_at = 0.0
         self._source_window: WindowInfo | None = None
-        self._source_window_seen_at: float | None = None
-        self._source_window_last_seen_at: float | None = None
         self._probe_miss_count = 0
         self._stable_count = 0
         self._stable_notified_hwnds: set[int] = set()
-        self._codex_ready = False
+        self._found_notified_hwnds: set[int] = set()
+        self._target_frame_ready = False
         self._media_finished_at: float | None = None
         self._dwm: DwmController | None = None
         self._dwm_failed = False
@@ -183,6 +174,7 @@ class SessionController(QObject):
         if self._started:
             return
         self._started = True
+        self._started_at = self._clock()
 
         if not defer_media:
             self._start_media()
@@ -210,50 +202,38 @@ class SessionController(QObject):
 
         self._poll_launch_state()
         self._retry_launch_if_needed()
-        if not self._codex_ready:
+        if not self._target_frame_ready and self._launch_result_emitted:
             self._poll_codex_state()
 
-        app_ready = self._codex_ready
+        target_ready = self._target_frame_ready
         if (
-            app_ready
+            not self._media_started
+            and not target_ready
+            and self._clock() - self._started_at
+            >= self.config.max_wait_seconds
+        ):
+            self.handoff(HandoffReason.TIMEOUT)
+            return
+        if (
+            target_ready
             and self._stage_timer is not None
             and "codex_stable" not in self._stage_timer.marks
         ):
             self._stage_timer.mark("codex_stable")
-        waited_seconds = (
-            self._clock() - self._hold_started_at if self._holding else 0.0
-        )
         if self._media_finished_at is not None:
             finished_seconds = self._clock() - self._media_finished_at
-            if waited_seconds >= self.config.max_wait_seconds and not app_ready:
-                self.handoff(HandoffReason.TIMEOUT)
-                return
-            if app_ready and finished_seconds >= self._final_hold_seconds:
+            self.window.show_waiting(False)
+            if finished_seconds >= self._final_hold_seconds:
                 self.handoff(HandoffReason.COMPLETED)
             return
 
-        decision = evaluate_timeline(
+        progress = transition_progress(
             self.config,
             media_seconds=self.media.position_seconds,
-            app_ready=app_ready,
-            waited_seconds=waited_seconds,
         )
 
-        if decision.action is PlaybackAction.TIMEOUT:
-            self.handoff(HandoffReason.TIMEOUT)
-            return
-        if decision.action is PlaybackAction.HOLD:
-            return
-        if decision.action is PlaybackAction.RESUME:
-            self._holding = False
-            self.media.resume()
-            self.window.show_waiting(False)
-            if self._stage_timer is not None:
-                self._stage_timer.mark("playback_resume")
-            self.hold_finished.emit()
-
-        if app_ready:
-            self._update_transition(decision.transition_progress)
+        if target_ready:
+            self._update_transition(progress)
 
     def handoff(self, reason: HandoffReason) -> None:
         if self._handing_off:
@@ -275,6 +255,17 @@ class SessionController(QObject):
                 self.window.show_error(f"无法激活 Codex：{exc}")
         elif decision.show_error:
             self.window.show_error("未找到可用的 Codex 主窗口")
+
+        dwm_complete = (
+            self._dwm is not None
+            and not self._dwm_failed
+            and self.media.position_seconds >= self.config.transition_end
+        )
+        if dwm_complete:
+            if self._stage_timer is not None:
+                self._stage_timer.mark("handoff_direct_dwm")
+            self._finish_handoff()
+            return
 
         try:
             self.window.fade_out(self._fade_out_ms, self._finish_handoff)
@@ -317,24 +308,19 @@ class SessionController(QObject):
             future = self._probe_future
             self._probe_future = None
             try:
-                found, content_ready = future.result()
+                found = future.result()
             except Exception:
-                found, content_ready = None, False
+                found = None
         else:
-            found, content_ready = self._probe_codex_state()
-        self._apply_codex_state(found, content_ready)
+            found = self._probe_codex_state()
+        self._apply_codex_state(found)
 
-    def _probe_codex_state(self) -> tuple[WindowInfo | None, bool]:
-        found = self._find_window()
-        content_ready = (
-            self._content_ready_finder() if found is not None else False
-        )
-        return found, content_ready
+    def _probe_codex_state(self) -> WindowInfo | None:
+        return self._find_window()
 
     def _apply_codex_state(
         self,
         found: WindowInfo | None,
-        content_ready: bool,
     ) -> None:
         if found is None:
             if self._source_window is not None:
@@ -342,23 +328,30 @@ class SessionController(QObject):
                 if self._probe_miss_count < 3:
                     return
             self._source_window = None
-            self._source_window_seen_at = None
-            self._source_window_last_seen_at = None
             self._probe_miss_count = 0
             self._stable_count = 0
             return
-        now = self._clock()
         self._probe_miss_count = 0
-        self._source_window_last_seen_at = now
         if (
             self._source_window is None
             or self._source_window.hwnd != found.hwnd
         ):
             self._source_window = found
-            self._source_window_seen_at = now
             self._stable_count = 1
             if self._stage_timer is not None:
                 self._stage_timer.mark("codex_window_found")
+            if (
+                found.hwnd not in self._found_notified_hwnds
+                and self._target_found_callback is not None
+            ):
+                self._found_notified_hwnds.add(found.hwnd)
+                try:
+                    self._target_found_callback(found)
+                except Exception:
+                    if self._stage_timer is not None:
+                        self._stage_timer.mark(
+                            "window_found_callback_failed"
+                        )
             return
 
         self._stable_count += 1
@@ -373,23 +366,17 @@ class SessionController(QObject):
                 except Exception:
                     if self._stage_timer is not None:
                         self._stage_timer.mark("window_alignment_failed")
-        fallback_ready = (
-            self._source_window_seen_at is not None
-            and self._clock() - self._source_window_seen_at
-            >= WINDOW_READY_FALLBACK_SECONDS
-        )
-        if self._stable_count >= 2 and (content_ready or fallback_ready):
-            self._codex_ready = True
-            self._launch_confirmed = True
-            self._launch_retry_at = None
-            if self._stage_timer is not None:
-                mark = (
-                    "codex_content_ready"
-                    if content_ready
-                    else "codex_ready_fallback"
-                )
-                if mark not in self._stage_timer.marks:
-                    self._stage_timer.mark(mark)
+        if self._stable_count >= 2 and self._media_started:
+            self._mark_target_frame_ready()
+
+    def _mark_target_frame_ready(self) -> None:
+        if self._target_frame_ready:
+            return
+        self._target_frame_ready = True
+        self._launch_confirmed = True
+        self._launch_retry_at = None
+        if self._stage_timer is not None:
+            self._stage_timer.mark("target_frame_ready")
 
     def _ensure_launch_requested(
         self,
@@ -433,6 +420,7 @@ class SessionController(QObject):
             return
 
         if result.existing_window_hwnd is not None:
+            self._expected_pid = None
             self._launch_accepted_at = now
             self._launch_retry_at = None
             if self._stage_timer is not None:
@@ -441,6 +429,8 @@ class SessionController(QObject):
             return
 
         if result.launch_requested:
+            if result.launched_pid is not None and result.launched_pid > 0:
+                self._expected_pid = result.launched_pid
             self._launch_accepted_at = now
             self._launch_retry_at = None
             if self._stage_timer is not None:
@@ -483,9 +473,16 @@ class SessionController(QObject):
 
     def _find_window(self) -> WindowInfo | None:
         try:
-            return self._window_finder(self.config)
+            found = self._window_finder(self.config)
         except OSError:
             return None
+        if (
+            found is not None
+            and self._expected_pid is not None
+            and found.pid != self._expected_pid
+        ):
+            return None
+        return found
 
     def _request_launch(self, retry: bool) -> LaunchResult:
         if self._stage_timer is not None:
@@ -513,15 +510,12 @@ class SessionController(QObject):
         if self._media_finished_at is not None:
             return
         self._media_finished_at = self._clock()
-        self._holding = True
-        self._hold_started_at = self._media_finished_at
         self.media.pause_at(
             max(0.0, self.config.duration - FINAL_FRAME_BACKOFF_SECONDS)
         )
-        self.window.show_waiting(True)
+        self.window.show_waiting(False)
         if self._stage_timer is not None:
-            self._stage_timer.mark("playback_hold")
-        self.hold_started.emit()
+            self._stage_timer.mark("playback_final_hold")
         self.tick()
 
     def _frame_opacity(self, seconds: float) -> float:

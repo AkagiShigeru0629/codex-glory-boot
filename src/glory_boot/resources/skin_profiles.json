@@ -1,9 +1,22 @@
 {
   "profiles": [
     {
-      "package_version": "26.1103.4239.0",
+      "package_version": "26.1111.2228.0",
       "required_selectors": [
-        "#root"
+        "#root",
+        "body",
+        "[class*=\"ComposerLayoutRoot-\"]"
+      ],
+      "required_tokens": [
+        "--color-surface"
+      ]
+    },
+    {
+      "package_version": "26.*",
+      "required_selectors": [
+        "#root",
+        "body",
+        "[class*=\"ComposerLayoutRoot-\"]"
       ],
       "required_tokens": [
         "--color-surface"

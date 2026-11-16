@@ -32,7 +32,7 @@ def check_assets() -> None:
 
     assert (width, height) == (1920, 1080), (width, height)
     assert abs(fps - 60) < 0.01, fps
-    assert abs(duration - 8.0) <= 0.1, duration
+    assert abs(duration - 7.7) <= 0.1, duration
     with Image.open(poster_path) as poster:
         assert poster.size == (1920, 1080), poster.size
         assert poster.mode == "RGB", poster.mode
@@ -83,6 +83,8 @@ def check_package() -> None:
         ("media", "poster.png"),
         ("media", "wallpaper.jpg"),
         ("config", "launcher.example.json"),
+        ("LICENSE",),
+        ("THIRD_PARTY_NOTICES.md",),
         ("_internal", "glory_boot", "resources", "skin.css"),
         ("_internal", "glory_boot", "resources", "skin.js"),
         ("_internal", "glory_boot", "resources", "skin_profiles.json"),

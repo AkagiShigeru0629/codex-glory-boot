@@ -95,7 +95,7 @@ class NativeDwmBackend:
             rcSource=RECT(),
             opacity=opacity,
             fVisible=visible,
-            fSourceClientAreaOnly=True,
+            fSourceClientAreaOnly=False,
         )
         result = _dwmapi.DwmUpdateThumbnailProperties(
             thumbnail,

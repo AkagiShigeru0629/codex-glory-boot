@@ -107,7 +107,6 @@ class SkinController(QObject):
     RESTORE_REQUEST = 4
     MONITOR_REQUEST = 5
     MAX_RECOVERY_ATTEMPTS = 3
-    CAPABILITY_RETRY_LIMIT = 5
 
     def __init__(
         self,
@@ -128,6 +127,7 @@ class SkinController(QObject):
         timeout_ms: int = 15_000,
         connect_timeout_ms: int = 3000,
         evaluate_timeout_ms: int = 3000,
+        capability_wait_ms: int = 20_000,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -138,7 +138,11 @@ class SkinController(QObject):
             or timeout_ms <= 0
         ):
             raise ValueError("皮肤等待时间必须为正数")
-        if connect_timeout_ms <= 0 or evaluate_timeout_ms <= 0:
+        if (
+            connect_timeout_ms <= 0
+            or evaluate_timeout_ms <= 0
+            or capability_wait_ms <= 0
+        ):
             raise ValueError("皮肤连接超时必须是正数")
 
         self._config = config
@@ -155,6 +159,7 @@ class SkinController(QObject):
         self._stage_marker = stage_marker
         self._connect_timeout_ms = connect_timeout_ms
         self._evaluate_timeout_ms = evaluate_timeout_ms
+        self._capability_wait_seconds = capability_wait_ms / 1000
         self._timeout_seconds = timeout_ms / 1000
 
         self._state = (
@@ -163,14 +168,12 @@ class SkinController(QObject):
         self._started = False
         self._closed = False
         self._launched_pid: int | None = None
-        self._launched_package: str | None = None
-        self._launched_version: str | None = None
         self._deadline = 0.0
         self._worker: ThreadPoolExecutor | None = None
         self._future: Future[_DiscoveryResult] | None = None
         self._cdp: CdpSession | None = None
         self._connected = False
-        self._capability_attempts = 0
+        self._capability_deadline = 0.0
         self._phase = ""
         self._page: DevToolsPage | None = None
         self._profile: SkinProfile | None = None
@@ -209,20 +212,6 @@ class SkinController(QObject):
             return
 
         self._launched_pid = launched_pid
-        try:
-            process_path = self._process_path(launched_pid)
-        except OSError:
-            process_path = None
-        self._launched_version = package_version_from_path(process_path or "")
-        self._launched_package = package_identity_from_path(process_path or "")
-        profile = select_skin_profile(
-            self._profiles,
-            self._launched_version,
-        )
-        if profile is None or self._launched_package is None:
-            self._finish(SkinState.SKIPPED, "skin_skipped_version")
-            return
-        self._profile = profile
         self._deadline = time.monotonic() + self._timeout_seconds
         self._worker = ThreadPoolExecutor(
             max_workers=1,
@@ -321,18 +310,37 @@ class SkinController(QObject):
             return _DiscoveryResult("waiting")
         if owner is None:
             return _DiscoveryResult("waiting")
-        if owner != pid:
-            try:
-                owner_path = self._process_path(owner)
-            except OSError:
-                return _DiscoveryResult("skipped", reason="owner")
-            if (
-                package_identity_from_path(owner_path or "")
-                != self._launched_package
-                or package_version_from_path(owner_path or "")
-                != self._launched_version
-            ):
-                return _DiscoveryResult("skipped", reason="owner")
+        try:
+            owner_path = self._process_path(owner)
+        except OSError:
+            return _DiscoveryResult("waiting")
+        owner_version = package_version_from_path(owner_path or "")
+        owner_package = package_identity_from_path(owner_path or "")
+        if owner_version is None or owner_package is None:
+            return _DiscoveryResult(
+                "waiting" if owner == pid else "skipped",
+                reason="" if owner == pid else "owner",
+            )
+
+        try:
+            launched_path = self._process_path(pid)
+        except OSError:
+            launched_path = None
+        launched_version = package_version_from_path(launched_path or "")
+        launched_package = package_identity_from_path(launched_path or "")
+        if (
+            launched_version is not None
+            and launched_package is not None
+            and (
+                launched_version != owner_version
+                or launched_package != owner_package
+            )
+        ):
+            return _DiscoveryResult("skipped", reason="owner")
+
+        profile = select_skin_profile(self._profiles, owner_version)
+        if profile is None:
+            return _DiscoveryResult("skipped", reason="version")
 
         try:
             pages = self._page_finder(self._port)
@@ -355,7 +363,7 @@ class SkinController(QObject):
         return _DiscoveryResult(
             "ready",
             page=pages[0],
-            profile=self._profile,
+            profile=profile,
             payload=payload,
         )
 
@@ -383,7 +391,9 @@ class SkinController(QObject):
         ):
             return
         self._connected = True
-        self._capability_attempts = 0
+        self._capability_deadline = (
+            time.monotonic() + self._capability_wait_seconds
+        )
         self._evaluate_capability()
 
     def _evaluate_capability(self) -> None:
@@ -405,8 +415,7 @@ class SkinController(QObject):
             return
         if request_id == self.CAPABILITY_REQUEST:
             if _value_from_result(result) is not True:
-                self._capability_attempts += 1
-                if self._capability_attempts < self.CAPABILITY_RETRY_LIMIT:
+                if time.monotonic() < self._capability_deadline:
                     QTimer.singleShot(
                         self._poll_timer.interval(),
                         self._evaluate_capability,
@@ -489,6 +498,13 @@ class SkinController(QObject):
             self._finish(SkinState.FAILED, "skin_restore_failed")
             return
         if self._state is SkinState.INSTALLED:
+            self._begin_recovery()
+            return
+        if self._phase == "capability" and reason in {
+            "connect_timeout",
+            "connect_failed",
+            "connection_closed",
+        }:
             self._begin_recovery()
             return
         if self._phase in {"install", "detect"}:
