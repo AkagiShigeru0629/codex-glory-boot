@@ -1,5 +1,4 @@
 import os
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,12 +10,12 @@ from PySide6.QtWidgets import QApplication
 from glory_boot.adapters.codex_runtime import CodexRuntimeStore
 from glory_boot.adapters.win32 import (
     WindowInfo,
-    client_screen_rect,
     cursor_work_area,
     find_codex_window,
     focus_window,
     monitor_work_areas,
     set_window_rect,
+    window_screen_rect,
 )
 from glory_boot.adapters.app_activation import ApplicationActivationBackend
 from glory_boot.adapters.network_ports import allocate_loopback_port
@@ -25,7 +24,7 @@ from glory_boot.diagnostics import SingleInstanceGuard, StageTimer
 from glory_boot.domain.models import AppConfig, Rect
 from glory_boot.domain.placement import default_launcher_rect
 from glory_boot.domain.policy import HandoffReason
-from glory_boot.domain.skin import SkinProfile, select_skin_profile
+from glory_boot.domain.skin import SkinProfile
 from glory_boot.services.codex_launcher import (
     CodexLauncher,
     FallbackProcessBackend,
@@ -34,15 +33,21 @@ from glory_boot.services.codex_launcher import (
     ProcessBackend,
     QProcessBackend,
 )
-from glory_boot.services.codex_readiness import CodexReadinessProbe
 from glory_boot.services.media import MediaController
 from glory_boot.services.session import SessionController
-from glory_boot.services.skin import SkinController
+from glory_boot.services.skin import SkinController, SkinState
+from glory_boot.services.window_gate import WindowGateController
 from glory_boot.services.window_placement import WindowPlacementController
 from glory_boot.ui.boot_window import BootWindow
 
 
-REVEAL_FALLBACK_MS = 12_000
+_SKIN_TERMINAL_STATES = {
+    SkinState.DISABLED,
+    SkinState.SKIPPED,
+    SkinState.INSTALLED,
+    SkinState.FAILED,
+    SkinState.RESTORED,
+}
 
 
 class WindowPresenter(Protocol):
@@ -50,6 +55,9 @@ class WindowPresenter(Protocol):
         ...
 
     def show(self) -> None:
+        ...
+
+    def setWindowOpacity(self, opacity: float) -> None:
         ...
 
 
@@ -80,7 +88,6 @@ def prepare_skin_launch(
     *,
     skin_disabled_by_cli: bool,
     benchmark: bool,
-    codex_version: str | None = None,
     skin_profiles: tuple[SkinProfile, ...] = (),
     port_allocator: Callable[[], int] = allocate_loopback_port,
 ) -> SkinLaunchOptions:
@@ -91,7 +98,7 @@ def prepare_skin_launch(
         or not Path(config.skin.wallpaper_path).is_file()
         or skin_disabled_by_cli
         or benchmark
-        or select_skin_profile(skin_profiles, codex_version) is None
+        or not skin_profiles
     ):
         return SkinLaunchOptions(False, None, "")
     try:
@@ -150,6 +157,7 @@ def build_skin_controller(
         port=options.skin_port,
         profiles=profiles,
         stage_marker=stage_marker,
+        timeout_ms=round(config.max_wait_seconds * 1000),
         parent=parent,
     )
 
@@ -165,12 +173,16 @@ def present_initial_window(
     """显示窗口后立即锁定原生矩形，再处理首帧绘制。"""
     try:
         rect = placement.initial_viewport()
+        hwnd = int(window.winId())
+        place_window(hwnd, rect)
+        window.setWindowOpacity(0.0)
         window.show()
-        place_window(int(window.winId()), rect)
+        place_window(hwnd, rect)
     except (OSError, RuntimeError, ValueError):
         timer.mark("window_placement_failed")
-
         window.show()
+    qt_app.processEvents()
+    window.setWindowOpacity(1.0)
     qt_app.processEvents()
     timer.mark("window_visible")
 
@@ -186,7 +198,6 @@ class LauncherApplication:
         benchmark: bool = False,
         skin_disabled_by_cli: bool = False,
         skin_profiles: tuple[SkinProfile, ...] = (),
-        codex_version: str | None = None,
         runtime_store: CodexRuntimeStore | None = None,
     ) -> None:
         self._root = root
@@ -198,7 +209,6 @@ class LauncherApplication:
             config,
             skin_disabled_by_cli=skin_disabled_by_cli,
             benchmark=benchmark,
-            codex_version=codex_version,
             skin_profiles=skin_profiles,
         )
         self.window = BootWindow()
@@ -212,10 +222,11 @@ class LauncherApplication:
             ),
             monitors=monitor_work_areas,
             default_rect=lambda: default_launcher_rect(cursor_work_area()),
-            client_rect=client_screen_rect,
+            target_rect=window_screen_rect,
             place_window=set_window_rect,
         )
         self._target_aligned = False
+        self._window_gate = WindowGateController()
         process_backend = build_process_backend(
             benchmark=benchmark,
             skin_enabled=self._skin_options.skin_enabled,
@@ -228,10 +239,9 @@ class LauncherApplication:
             else find_codex_window,
             launch_arguments=self._skin_options.launch_arguments,
         )
-        readiness = CodexReadinessProbe(
-            local_app_data / "Codex" / "Logs",
-            launched_at=time.time(),
-        )
+        self._handoff_completed = False
+        self._skin_started = False
+        self._skip_requested = False
         self.session = SessionController(
             config,
             launcher=self.launcher,
@@ -240,14 +250,10 @@ class LauncherApplication:
             window_finder=(lambda _config: None)
             if benchmark
             else find_codex_window,
+            target_found_callback=self._conceal_target_window,
             target_stable_callback=self._align_target_window,
             viewport_provider=self._placement.viewport,
-            exit_callback=self._qt_app.quit,
-            content_ready_finder=(
-                (lambda: False)
-                if benchmark
-                else readiness.is_primary_mounted
-            ),
+            exit_callback=self._request_exit,
             stage_timer=timer,
             parent=self.window,
         )
@@ -256,9 +262,6 @@ class LauncherApplication:
         )
         self._benchmark = benchmark
         self._window_visible = False
-        self._reveal_timer = QTimer(self.window)
-        self._reveal_timer.setSingleShot(True)
-        self._reveal_timer.timeout.connect(self._reveal_window)
         self.skin = build_skin_controller(
             config,
             root=root,
@@ -268,11 +271,11 @@ class LauncherApplication:
             parent=self.window,
         )
         self.session.handoff_completed.connect(self._remember_placement)
-        self.session.handoff_completed.connect(self._close_skin)
+        self.session.handoff_started.connect(self._reveal_for_handoff)
         self.session.launch_result_ready.connect(self._start_skin)
-        self.window.skip_requested.connect(
-            lambda: self.session.handoff(HandoffReason.SKIPPED)
-        )
+        self.window.skip_requested.connect(self._skip_startup)
+        if self.skin is not None:
+            self.skin.state_changed.connect(self._on_skin_state_changed)
 
     def _align_target_window(self, window: WindowInfo) -> None:
         if self._window_visible:
@@ -282,8 +285,12 @@ class LauncherApplication:
         self._timer.mark(
             "window_aligned" if aligned else "window_align_failed"
         )
-        if not self._window_visible:
+        if aligned:
             self._reveal_window()
+
+    def _conceal_target_window(self, window: WindowInfo) -> None:
+        if self._window_gate.conceal(window):
+            self._timer.mark("codex_window_concealed")
 
     def _remember_placement(self) -> None:
         if self._target_aligned and self._placement.remember_success():
@@ -291,10 +298,9 @@ class LauncherApplication:
         elif self._target_aligned:
             self._timer.mark("window_geometry_save_failed")
 
-    def _reveal_window(self) -> None:
+    def _reveal_window(self, *, start_media: bool = True) -> None:
         if self._window_visible:
             return
-        self._reveal_timer.stop()
         present_initial_window(
             window=self.window,
             placement=self._placement,
@@ -302,9 +308,17 @@ class LauncherApplication:
             qt_app=self._qt_app,
             timer=self._timer,
         )
-        self.window.attach_media(self.media)
-        self.session.begin_media()
+        if start_media:
+            self._window_gate.release_all()
+            self.window.attach_media(self.media)
+            self.session.begin_media()
+        else:
+            self._window_gate.release_all()
         self._window_visible = True
+
+    def _reveal_for_handoff(self) -> None:
+        if not self._window_visible:
+            self._reveal_window(start_media=False)
 
     def _focus_existing_codex(self) -> bool:
         try:
@@ -336,7 +350,33 @@ class LauncherApplication:
             if existing is not None:
                 runtime_store.save(existing.process_path)
         if self.skin is not None:
+            self._skin_started = True
             self.skin.start(result.launched_pid)
+
+    def _skip_startup(self) -> None:
+        self._skip_requested = True
+        self.session.handoff(HandoffReason.SKIPPED)
+
+    def _on_skin_state_changed(self, state: str) -> None:
+        if (
+            self._handoff_completed
+            and state in {item.value for item in _SKIN_TERMINAL_STATES}
+        ):
+            self._close_skin()
+            self._qt_app.quit()
+
+    def _request_exit(self) -> None:
+        self._handoff_completed = True
+        skin_pending = (
+            self.skin is not None
+            and self._skin_started
+            and not self._skip_requested
+            and self.skin.state not in _SKIN_TERMINAL_STATES
+        )
+        if skin_pending:
+            return
+        self._close_skin()
+        self._qt_app.quit()
 
     def _close_skin(self) -> None:
         if self.skin is not None:
@@ -344,33 +384,38 @@ class LauncherApplication:
 
     def run(self, *, benchmark: bool = False) -> int:
         self._benchmark = benchmark
-        with SingleInstanceGuard() as guard:
-            if guard.already_running:
-                existing = find_codex_window(self._config)
-                if existing is not None:
-                    focus_window(existing.hwnd)
-                self._close_skin()
-                return 0
+        quit_on_last_window = self._qt_app.quitOnLastWindowClosed()
+        self._qt_app.setQuitOnLastWindowClosed(False)
+        try:
+            with SingleInstanceGuard() as guard:
+                if guard.already_running:
+                    existing = find_codex_window(self._config)
+                    if existing is not None:
+                        focus_window(existing.hwnd)
+                    self._close_skin()
+                    return 0
 
-            if not benchmark and self._focus_existing_codex():
-                return 0
+                if not benchmark and self._focus_existing_codex():
+                    return 0
 
-            self.window.show_poster_first(self._config.poster_path)
-            if benchmark:
-                self._reveal_window()
-                self.session.start()
-            else:
-                self.session.start(defer_media=True)
-                self._reveal_timer.start(REVEAL_FALLBACK_MS)
-            if benchmark:
-                QTimer.singleShot(1500, self._qt_app.quit)
-            try:
-                exit_code = self._qt_app.exec()
-            finally:
-                self._close_skin()
-            if benchmark:
-                self._timer.mark("benchmark_exit")
-            return exit_code
+                self.window.show_poster_first(self._config.poster_path)
+                if benchmark:
+                    self._reveal_window()
+                    self.session.start()
+                else:
+                    self.session.start(defer_media=True)
+                if benchmark:
+                    QTimer.singleShot(1500, self._qt_app.quit)
+                try:
+                    exit_code = self._qt_app.exec()
+                finally:
+                    self._window_gate.release_all()
+                    self._close_skin()
+                if benchmark:
+                    self._timer.mark("benchmark_exit")
+                return exit_code
+        finally:
+            self._qt_app.setQuitOnLastWindowClosed(quit_on_last_window)
 
 
 def create_qt_application(argv: Sequence[str] | None = None) -> QApplication:

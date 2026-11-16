@@ -19,7 +19,6 @@ def _default_config_data() -> dict[str, Any]:
         "video_path": "media/startup.mp4",
         "poster_path": "media/poster.png",
         "duration": 8.0,
-        "hold_at": 6.4,
         "transition_start": 6.7,
         "transition_end": 7.6,
         "max_wait_seconds": 60.0,
@@ -148,7 +147,6 @@ def test_load_config_rejects_empty_process_name(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("hold_at", 6.8),
         ("transition_start", 7.6),
         ("transition_end", 8.0),
     ],
@@ -258,7 +256,6 @@ def test_validate_config_rejects_out_of_order_screen_frames() -> None:
         video_path="video.mp4",
         poster_path="poster.png",
         duration=8.0,
-        hold_at=6.3,
         transition_start=6.8,
         transition_end=7.6,
         max_wait_seconds=60.0,
@@ -282,11 +279,32 @@ def test_project_config_targets_microsoft_store_chatgpt_executable() -> None:
     assert data["process_path_fragment"] == "OpenAI.Codex_"
 
 
-def test_project_config_uses_final_retime_timeline() -> None:
+def test_project_config_uses_crt_shutdown_timeline() -> None:
     config_path = ROOT / "config" / "launcher.example.json"
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    assert data["hold_at"] == 6.4
-    assert data["transition_start"] == 6.7
+    assert data["duration"] == 7.7
+    assert data["transition_start"] == 7.1
     assert data["transition_end"] == 7.6
-    assert data["screen_frames"][1]["time"] == 6.7
+    assert data["screen_frames"] == [
+        {
+            "time": 7.1,
+            "rect": {
+                "x": 0.0,
+                "y": 0.0,
+                "width": 1.0,
+                "height": 1.0,
+            },
+            "opacity": 0.0,
+        },
+        {
+            "time": 7.6,
+            "rect": {
+                "x": 0.0,
+                "y": 0.0,
+                "width": 1.0,
+                "height": 1.0,
+            },
+            "opacity": 1.0,
+        },
+    ]

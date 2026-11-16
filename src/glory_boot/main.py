@@ -9,7 +9,10 @@ from typing import Sequence
 
 from PySide6.QtWidgets import QMessageBox
 
-from glory_boot.adapters.codex_runtime import CodexRuntimeStore
+from glory_boot.adapters.codex_runtime import (
+    CodexRuntimeStore,
+    refresh_runtime_store,
+)
 from glory_boot.adapters.skin_profiles import load_skin_profiles
 from glory_boot.config import ConfigError, load_config
 from glory_boot.diagnostics import StageTimer
@@ -64,7 +67,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         runtime_store = CodexRuntimeStore(
             local_app_data / "GloryCodexBoot" / "codex-runtime.json"
         )
-        runtime_install = runtime_store.load()
+        runtime_install = refresh_runtime_store(runtime_store)
+        if runtime_install is not None:
+            timer.mark("codex_runtime_refreshed")
         application = LauncherApplication(
             root=root,
             config=config,
@@ -73,11 +78,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             benchmark=options.benchmark,
             skin_disabled_by_cli=options.disable_skin,
             skin_profiles=load_skin_profiles(),
-            codex_version=(
-                runtime_install.version
-                if runtime_install is not None
-                else None
-            ),
             runtime_store=runtime_store,
         )
         exit_code = application.run(benchmark=options.benchmark)

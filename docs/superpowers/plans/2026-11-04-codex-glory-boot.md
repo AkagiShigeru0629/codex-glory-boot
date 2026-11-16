@@ -1,5 +1,7 @@
 # Codex 荣耀 Python 零等待启动实施计划
 
+> **历史说明：** 冷启动“立即显示首帧”的显示时机已于 2026-11-12 被 `2026-11-09-phase2a-window-adaptation.md` 的任务 8 改为等待 Codex 主窗口稳定后再显示和播放；本文件其余执行记录保留为历史证据。
+
 > **执行代理须知：** 必须使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans`，按任务顺序执行本计划，并用复选框记录进度。
 
 **目标：** 使用全 Python 构建 Windows 启动器：先显示荣耀动画首帧，同时异步启动 Codex；Codex 晚到时停留，就绪后通过桌面窗口管理器（Desktop Window Manager，DWM）无缝交接。

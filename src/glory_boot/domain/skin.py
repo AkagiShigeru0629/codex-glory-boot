@@ -37,10 +37,16 @@ def select_skin_profile(
     profiles: tuple[SkinProfile, ...],
     version: str | None,
 ) -> SkinProfile | None:
-    """只允许已登记且完全匹配当前包版本的样式配置。"""
+    """只允许精确版本或已登记主版本系列命中样式配置。"""
     if version is None:
         return None
     for profile in profiles:
         if profile.package_version == version:
+            return profile
+    for profile in profiles:
+        if (
+            profile.package_version.endswith(".*")
+            and version.startswith(profile.package_version[:-1])
+        ):
             return profile
     return None

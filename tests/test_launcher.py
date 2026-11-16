@@ -22,7 +22,6 @@ def _config() -> AppConfig:
         video_path="startup.mp4",
         poster_path="poster.png",
         duration=8.0,
-        hold_at=6.3,
         transition_start=6.8,
         transition_end=7.6,
         max_wait_seconds=60.0,

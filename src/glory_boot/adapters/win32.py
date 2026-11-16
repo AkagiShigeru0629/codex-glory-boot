@@ -12,7 +12,11 @@ from glory_boot.domain.models import AppConfig, Rect
 
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_LAYERED = 0x00080000
+LWA_COLORKEY = 0x00000001
+LWA_ALPHA = 0x00000002
 DWMWA_CLOAKED = 14
+DWMWA_EXTENDED_FRAME_BOUNDS = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WM_NULL = 0x0000
 SMTO_ABORTIFHUNG = 0x0002
@@ -52,6 +56,16 @@ class WindowInfo:
     process_path: str
     client_rect: Rect
     responsive: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WindowTransparencyState:
+    hwnd: int
+    ex_style: int
+    had_layered_attributes: bool
+    color_key: int
+    alpha: int
+    layered_flags: int
 
 
 class RECT(ctypes.Structure):
@@ -125,6 +139,8 @@ _user32.GetWindowThreadProcessId.argtypes = [
 _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 _user32.GetClientRect.restype = wintypes.BOOL
+_user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+_user32.GetWindowRect.restype = wintypes.BOOL
 _user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
 _user32.ClientToScreen.restype = wintypes.BOOL
 _user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
@@ -167,6 +183,20 @@ _user32.SetWindowPos.argtypes = [
     wintypes.UINT,
 ]
 _user32.SetWindowPos.restype = wintypes.BOOL
+_user32.GetLayeredWindowAttributes.argtypes = [
+    wintypes.HWND,
+    ctypes.POINTER(wintypes.DWORD),
+    ctypes.POINTER(wintypes.BYTE),
+    ctypes.POINTER(wintypes.DWORD),
+]
+_user32.GetLayeredWindowAttributes.restype = wintypes.BOOL
+_user32.SetLayeredWindowAttributes.argtypes = [
+    wintypes.HWND,
+    wintypes.DWORD,
+    wintypes.BYTE,
+    wintypes.DWORD,
+]
+_user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
 
 _get_window_long = getattr(
     _user32,
@@ -175,6 +205,17 @@ _get_window_long = getattr(
 )
 _get_window_long.argtypes = [wintypes.HWND, ctypes.c_int]
 _get_window_long.restype = ctypes.c_ssize_t
+_set_window_long = getattr(
+    _user32,
+    "SetWindowLongPtrW",
+    _user32.SetWindowLongW,
+)
+_set_window_long.argtypes = [
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_ssize_t,
+]
+_set_window_long.restype = ctypes.c_ssize_t
 
 _kernel32.OpenProcess.argtypes = [
     wintypes.DWORD,
@@ -262,6 +303,62 @@ def focus_window(hwnd: int) -> None:
         raise Win32Error("无法把 Codex 主窗口切换到前台")
 
 
+def conceal_window(hwnd: int) -> WindowTransparencyState:
+    """把目标窗口设为完全透明，保留其布局和事件消息。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+    ex_style = int(_get_window_long(hwnd, GWL_EXSTYLE))
+    color = wintypes.DWORD()
+    alpha = wintypes.BYTE()
+    flags = wintypes.DWORD()
+    had_layered = bool(
+        _user32.GetLayeredWindowAttributes(
+            hwnd,
+            ctypes.byref(color),
+            ctypes.byref(alpha),
+            ctypes.byref(flags),
+        )
+    )
+    if not _set_window_long(
+        hwnd,
+        GWL_EXSTYLE,
+        ex_style | WS_EX_LAYERED,
+    ):
+        raise Win32Error("无法设置目标窗口分层样式")
+    if not _user32.SetLayeredWindowAttributes(
+        hwnd,
+        0,
+        0,
+        LWA_ALPHA,
+    ):
+        _set_window_long(hwnd, GWL_EXSTYLE, ex_style)
+        raise Win32Error("无法隐藏目标窗口")
+    return WindowTransparencyState(
+        hwnd=hwnd,
+        ex_style=ex_style,
+        had_layered_attributes=had_layered,
+        color_key=int(color.value),
+        alpha=int(alpha.value),
+        layered_flags=int(flags.value),
+    )
+
+
+def restore_window(state: WindowTransparencyState) -> None:
+    """恢复被 conceal_window 修改的窗口样式与透明度。"""
+    if state.hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+    _user32.SetLayeredWindowAttributes(state.hwnd, 0, 255, LWA_ALPHA)
+    _set_window_long(state.hwnd, GWL_EXSTYLE, state.ex_style)
+    if state.had_layered_attributes:
+        if not _user32.SetLayeredWindowAttributes(
+            state.hwnd,
+            state.color_key,
+            state.alpha,
+            state.layered_flags,
+        ):
+            raise Win32Error("无法恢复目标窗口透明度")
+
+
 def client_screen_rect(hwnd: int) -> Rect:
     """读取窗口客户区的物理屏幕矩形。"""
     if hwnd <= 0:
@@ -279,6 +376,35 @@ def client_screen_rect(hwnd: int) -> Rect:
         width=client.right - client.left,
         height=client.bottom - client.top,
     )
+
+
+def window_screen_rect(hwnd: int) -> Rect:
+    """读取包含标题栏和边框的可见窗口物理矩形。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+
+    frame = RECT()
+    result = _dwmapi.DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_EXTENDED_FRAME_BOUNDS,
+        ctypes.byref(frame),
+        ctypes.sizeof(frame),
+    )
+    if result != 0 and not _user32.GetWindowRect(
+        hwnd,
+        ctypes.byref(frame),
+    ):
+        raise Win32Error("无法读取目标窗口外框")
+
+    rect = Rect(
+        x=frame.left,
+        y=frame.top,
+        width=frame.right - frame.left,
+        height=frame.bottom - frame.top,
+    )
+    if rect.width <= 0 or rect.height <= 0:
+        raise Win32Error("目标窗口外框尺寸无效")
+    return rect
 
 
 def set_window_rect(hwnd: int, rect: Rect) -> None:

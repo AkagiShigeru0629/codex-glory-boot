@@ -29,30 +29,30 @@ class PlacementHarness:
         tmp_path: Path,
         *,
         saved: Rect | None = None,
-        client_rect: Callable[[int], Rect] | None = None,
-        client_rect_error: Exception | None = None,
+        target_rect: Callable[[int], Rect] | None = None,
+        target_rect_error: Exception | None = None,
         default_rect_error: Exception | None = None,
     ) -> None:
         self.store = WindowStateStore(tmp_path / "window-state.json")
         if saved is not None:
             self.store.save(saved)
         self.placed: list[tuple[int, Rect]] = []
-        self.client_rect_calls: list[int] = []
-        self.client_rect_error = client_rect_error
+        self.target_rect_calls: list[int] = []
+        self.target_rect_error = target_rect_error
         self.default_rect_error = default_rect_error
         self.controller = WindowPlacementController(
             window_hwnd=lambda: 900,
             state_store=self.store,
             monitors=lambda: MONITORS,
             default_rect=lambda: self._default_rect(),
-            client_rect=client_rect or self._client_rect,
+            target_rect=target_rect or self._target_rect,
             place_window=self._place_window,
         )
 
-    def _client_rect(self, hwnd: int) -> Rect:
-        self.client_rect_calls.append(hwnd)
-        if self.client_rect_error is not None:
-            raise self.client_rect_error
+    def _target_rect(self, hwnd: int) -> Rect:
+        self.target_rect_calls.append(hwnd)
+        if self.target_rect_error is not None:
+            raise self.target_rect_error
         return Rect(-1920, 40, 1400, 820)
 
     def _default_rect(self) -> Rect:
@@ -106,7 +106,7 @@ def test_align_moves_window_once_and_updates_viewport(tmp_path: Path) -> None:
 def test_align_failure_keeps_previous_viewport(tmp_path: Path) -> None:
     harness = PlacementHarness(
         tmp_path,
-        client_rect_error=OSError("denied"),
+        target_rect_error=OSError("denied"),
     )
     initial = harness.controller.initial_viewport()
 

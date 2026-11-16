@@ -49,11 +49,6 @@
 - 归属：`yushua0808-cpu` 及项目贡献者。
 - 来源：<https://github.com/yushua0808-cpu/dragon-codex-boot>
 
-未复制 `yanami-sec/codex-startup-animation-windows` 的源码，因为该参考项目没有明确许可证。
-
-## 正式视觉素材
-
-- 当前首帧海报和 8 秒动画由项目内 Python 代码程序化绘制。
-- 正式媒体不包含原作角色、动画截图、游戏画面或官方 Logo。
-- `media/wallpaper.jpg` 是经秋月大人允许提交的本地测试壁纸；公开分发前仍需确认来源与授权，或替换为已获授权的素材。
-- 发布包不读取也不包含 `assets/local/` 中的历史参考素材。
+未复制 `yanami-sec/codex-startup-animation-windows` 或本地
+`codex-startup-animation-windows-fixed` 变体的源码，因为这些参考项目没有明确许可证。
+本项目的壁纸叠加结构仅依据其运行时可观察行为与计算样式独立实现。

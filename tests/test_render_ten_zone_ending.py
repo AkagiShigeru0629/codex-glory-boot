@@ -32,7 +32,7 @@ def _configure_small_canvas(renderer: ModuleType) -> None:
     renderer.TITLE_SAFE_REGION = (136, 88, 344, 182)
 
 
-def test_renderer_matches_production_media_contract() -> None:
+def test_historical_ten_zone_renderer_keeps_its_source_contract() -> None:
     renderer = _load_renderer()
 
     assert renderer.WIDTH == 1920

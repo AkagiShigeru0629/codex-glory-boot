@@ -23,7 +23,7 @@ def _finite_number(value: object) -> float | None:
 
 
 class WindowStateStore:
-    """在本地保存最近一次成功交接的 Codex 客户区。"""
+    """在本地保存最近一次成功交接的 Codex 整窗外框。"""
 
     def __init__(self, path: Path) -> None:
         self._path = path

@@ -54,6 +54,9 @@ class BootWindow(QWidget):
 
         self.video = QVideoWidget()
         self.video.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.video.setAspectRatioMode(
+            Qt.AspectRatioMode.IgnoreAspectRatio
+        )
         self.video.hide()
         self.player: QMediaPlayer | None = None
 
@@ -100,7 +103,7 @@ class BootWindow(QWidget):
             pixmap.scaled(
                 max(1, self.width()),
                 max(1, self.height()),
-                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
@@ -172,7 +175,7 @@ class BootWindow(QWidget):
                 self._poster_source.scaled(
                     max(1, self.width()),
                     max(1, self.height()),
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             )

@@ -38,7 +38,6 @@ class AppConfig:
     video_path: str
     poster_path: str
     duration: float
-    hold_at: float
     transition_start: float
     transition_end: float
     max_wait_seconds: float

@@ -82,7 +82,7 @@
             "--glory-boot-wallpaper",
             `url("${wallpaperUrl}")`,
         );
-        root.style.setProperty("--glory-boot-wash", "0.72");
+        root.style.setProperty("--glory-boot-wash", "0.58");
         root.setAttribute("data-glory-boot-skin", "active");
         document.head.appendChild(style);
         window.addEventListener("keydown", onKeydown, true);

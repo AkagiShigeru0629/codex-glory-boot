@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+import glory_boot.adapters.dwm as dwm_module
 import glory_boot.adapters.win32 as win32
 from glory_boot.adapters.dwm import DwmController
 from glory_boot.adapters.win32 import (
@@ -9,11 +10,14 @@ from glory_boot.adapters.win32 import (
     WindowInfo,
     Win32Error,
     client_screen_rect,
+    conceal_window,
     cursor_work_area,
     monitor_work_areas,
     process_path_for_pid,
+    restore_window,
     select_codex_window,
     set_window_rect,
+    window_screen_rect,
 )
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame
 
@@ -27,7 +31,6 @@ def config() -> AppConfig:
         video_path="startup.mp4",
         poster_path="poster.png",
         duration=8.0,
-        hold_at=6.3,
         transition_start=6.8,
         transition_end=7.6,
         max_wait_seconds=60.0,
@@ -120,6 +123,12 @@ def test_select_codex_window_rejects_multiple_matches(
 class FakeUser32:
     def __init__(self) -> None:
         self.position: tuple[int, int, int, int] | None = None
+        self.window_rect = (140, 56, 960, 696)
+        self.ex_style = 0x00000100
+        self.layered = False
+        self.color_key = 0
+        self.alpha = 255
+        self.layered_flags = 0
 
     def GetClientRect(self, hwnd: int, pointer: object) -> int:
         assert hwnd == 1001
@@ -148,6 +157,57 @@ class FakeUser32:
         flags: int,
     ) -> int:
         self.position = (x, y, width, height)
+        return 1
+
+    def GetWindowRect(self, hwnd: int, pointer: object) -> int:
+        assert hwnd == 1001
+        rect = pointer._obj  # type: ignore[attr-defined]
+        left, top, right, bottom = self.window_rect
+        rect.left = left
+        rect.top = top
+        rect.right = right
+        rect.bottom = bottom
+        return 1
+
+    def GetWindowLongPtrW(self, hwnd: int, index: int) -> int:
+        assert hwnd == 1001
+        assert index == win32.GWL_EXSTYLE
+        return self.ex_style
+
+    def SetWindowLongPtrW(self, hwnd: int, index: int, value: int) -> int:
+        assert hwnd == 1001
+        assert index == win32.GWL_EXSTYLE
+        previous = self.ex_style
+        self.ex_style = value
+        return previous
+
+    def GetLayeredWindowAttributes(
+        self,
+        hwnd: int,
+        color_pointer: object,
+        alpha_pointer: object,
+        flags_pointer: object,
+    ) -> int:
+        assert hwnd == 1001
+        if not self.layered:
+            return 0
+        color_pointer._obj.value = self.color_key
+        alpha_pointer._obj.value = self.alpha
+        flags_pointer._obj.value = self.layered_flags
+        return 1
+
+    def SetLayeredWindowAttributes(
+        self,
+        hwnd: int,
+        color_key: int,
+        alpha: int,
+        flags: int,
+    ) -> int:
+        assert hwnd == 1001
+        self.layered = True
+        self.color_key = color_key
+        self.alpha = alpha
+        self.layered_flags = flags
         return 1
 
     def GetCursorPos(self, pointer: object) -> int:
@@ -186,12 +246,60 @@ class FakeUser32:
         return 1
 
 
+class FakeDwmApi:
+    def DwmGetWindowAttribute(
+        self,
+        hwnd: int,
+        attribute: int,
+        pointer: object,
+        size: int,
+    ) -> int:
+        assert hwnd == 1001
+        assert attribute == win32.DWMWA_EXTENDED_FRAME_BOUNDS
+        assert size == win32.ctypes.sizeof(win32.RECT)
+        rect = pointer._obj  # type: ignore[attr-defined]
+        rect.left = 144
+        rect.top = 64
+        rect.right = 956
+        rect.bottom = 680
+        return 0
+
+
+class FailingDwmApi:
+    def DwmGetWindowAttribute(
+        self,
+        _hwnd: int,
+        _attribute: int,
+        _pointer: object,
+        _size: int,
+    ) -> int:
+        return -1
+
+
 def test_client_screen_rect_converts_client_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(win32, "_user32", FakeUser32())
 
     assert client_screen_rect(1001) == Rect(150, 80, 800, 600)
+
+
+def test_window_screen_rect_uses_dwm_visible_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win32, "_user32", FakeUser32())
+    monkeypatch.setattr(win32, "_dwmapi", FakeDwmApi())
+
+    assert window_screen_rect(1001) == Rect(144, 64, 812, 616)
+
+
+def test_window_screen_rect_falls_back_to_window_rect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(win32, "_user32", FakeUser32())
+    monkeypatch.setattr(win32, "_dwmapi", FailingDwmApi())
+
+    assert window_screen_rect(1001) == Rect(140, 56, 820, 640)
 
 
 def test_set_window_rect_uses_physical_rectangle(
@@ -223,6 +331,26 @@ def test_window_geometry_rejects_invalid_inputs() -> None:
     with pytest.raises(ValueError):
         set_window_rect(1001, Rect(0, 0, 0, 100))
     assert process_path_for_pid(0) is None
+
+
+def test_window_can_be_concealed_and_restored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user32 = FakeUser32()
+    monkeypatch.setattr(win32, "_user32", user32)
+    monkeypatch.setattr(win32, "_get_window_long", user32.GetWindowLongPtrW)
+    monkeypatch.setattr(win32, "_set_window_long", user32.SetWindowLongPtrW)
+
+    state = conceal_window(1001)
+
+    assert user32.ex_style & win32.WS_EX_LAYERED
+    assert user32.alpha == 0
+    assert user32.layered_flags == win32.LWA_ALPHA
+
+    restore_window(state)
+
+    assert user32.ex_style == 0x00000100
+    assert user32.alpha == 255
 
 
 class FakeDwmBackend:
@@ -276,3 +404,35 @@ def test_dwm_controller_close_is_idempotent_and_releases_once() -> None:
     controller.close()
 
     assert backend.unregister_calls == [77]
+
+
+class RecordingDwmApi:
+    def __init__(self) -> None:
+        self.properties: object | None = None
+
+    def DwmUpdateThumbnailProperties(
+        self,
+        _thumbnail: int,
+        pointer: object,
+    ) -> int:
+        self.properties = pointer._obj  # type: ignore[attr-defined]
+        return 0
+
+
+def test_native_dwm_transition_uses_full_window_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = RecordingDwmApi()
+    monkeypatch.setattr(dwm_module, "_dwmapi", api)
+    backend = dwm_module.NativeDwmBackend()
+
+    backend.update_thumbnail(
+        77,
+        Rect(10, 20, 1280, 720),
+        128,
+        True,
+    )
+
+    properties = api.properties
+    assert properties is not None
+    assert properties.fSourceClientAreaOnly == 0

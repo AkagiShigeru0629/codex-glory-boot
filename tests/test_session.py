@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from concurrent.futures import Future
 from threading import Condition, Event
 import time
 from typing import Callable
@@ -21,7 +22,6 @@ def _config() -> AppConfig:
         video_path="startup.mp4",
         poster_path="poster.png",
         duration=8.0,
-        hold_at=6.4,
         transition_start=6.7,
         transition_end=7.6,
         max_wait_seconds=60.0,
@@ -182,11 +182,11 @@ def _existing_window() -> WindowInfo:
 def _session(
     *,
     window_finder: Callable[[AppConfig], WindowInfo | None] = lambda _config: None,
-    content_ready_finder: Callable[[], bool] = lambda: True,
     dwm: FakeDwmController | None = None,
     exit_callback=None,
     async_window_probe: bool = False,
     launcher_results: list[LaunchResult] | None = None,
+    target_found_callback: Callable[[WindowInfo], None] | None = None,
     target_stable_callback: Callable[[WindowInfo], None] | None = None,
 ):
     media = FakeMedia()
@@ -202,10 +202,10 @@ def _session(
         dwm_factory=lambda _destination: dwm or FakeDwmController(),
         viewport_provider=lambda: Rect(0, 0, 1920, 1080),
         exit_callback=exit_callback,
-        content_ready_finder=content_ready_finder,
         clock=lambda: now[0],
         schedule_timer=False,
         async_window_probe=async_window_probe,
+        target_found_callback=target_found_callback,
         target_stable_callback=target_stable_callback,
     )
     return controller, media, launcher, window, now
@@ -226,6 +226,74 @@ def test_target_stable_callback_fires_once_per_window() -> None:
     assert aligned == [4321]
 
 
+def test_target_found_callback_fires_on_first_eligible_window() -> None:
+    found_hwnds: list[int] = []
+    controller, _media, launcher, _window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+        target_found_callback=lambda found: found_hwnds.append(found.hwnd),
+    )
+
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    assert found_hwnds == [4321]
+
+
+def test_launched_process_id_rejects_stale_codex_window() -> None:
+    windows: list[WindowInfo | None] = [
+        _existing_window(),
+        WindowInfo(
+            hwnd=6789,
+            pid=9876,
+            process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+            client_rect=Rect(320, 80, 1280, 720),
+            responsive=True,
+        ),
+        WindowInfo(
+            hwnd=6789,
+            pid=9876,
+            process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+            client_rect=Rect(320, 80, 1280, 720),
+            responsive=True,
+        ),
+    ]
+    found_hwnds: list[int] = []
+
+    def finder(_config: AppConfig) -> WindowInfo | None:
+        return windows.pop(0) if windows else None
+
+    controller, _media, launcher, _window, _now = _session(
+        window_finder=finder,
+        target_found_callback=lambda found: found_hwnds.append(found.hwnd),
+        launcher_results=[
+            LaunchResult(launch_requested=True, launched_pid=9876)
+        ],
+    )
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+    controller.tick()
+
+    assert found_hwnds == [6789]
+
+
+def test_window_probe_waits_for_launch_identity() -> None:
+    found_hwnds: list[int] = []
+    controller, _media, _launcher, _window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+        target_found_callback=lambda found: found_hwnds.append(found.hwnd),
+    )
+    controller._started = True
+    controller._launch_future = Future()
+
+    controller.tick()
+
+    assert found_hwnds == []
+
+
 def test_launch_result_ready_emits_successful_launch_pid() -> None:
     controller, _media, launcher, _window, _now = _session(
         launcher_results=[
@@ -244,26 +312,22 @@ def test_launch_result_ready_emits_successful_launch_pid() -> None:
     ]
 
 
-def test_session_plays_animation_to_end_before_waiting_for_codex() -> None:
-    controller, media, launcher, window, now = _session()
-    hold_events: list[None] = []
-    controller.hold_started.connect(lambda: hold_events.append(None))
+def test_stable_target_frame_keeps_animation_playing_through_hold_point() -> None:
+    controller, media, launcher, window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+    )
     controller.start()
     assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
 
     media.position = 6.4
     controller.tick()
-    controller.tick()
-    assert media.pause_calls == []
-    assert window.waiting_states == []
-    assert hold_events == []
 
-    media.position = 8.0
-    media.finished.emit()
-    assert media.pause_calls == [pytest.approx(7.95)]
+    assert media.pause_calls == []
     assert media.plain_pause_calls == 0
-    assert window.waiting_states == [True]
-    assert len(hold_events) == 1
+    assert True not in window.waiting_states
+    assert window.close_calls == 0
 
 
 def test_deferred_media_starts_only_when_revealed() -> None:
@@ -279,6 +343,39 @@ def test_deferred_media_starts_only_when_revealed() -> None:
 
     assert media.opened_path == "startup.mp4"
     assert media.play_calls == 1
+
+
+def test_stable_frame_does_not_become_ready_before_deferred_media_begins() -> None:
+    controller, _media, launcher, _window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+    )
+    controller.start(defer_media=True)
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    assert controller._target_frame_ready is False
+
+    controller.begin_media()
+    controller.tick()
+
+    assert controller._target_frame_ready is True
+
+
+def test_deferred_media_times_out_when_codex_window_never_appears() -> None:
+    completed: list[None] = []
+    controller, media, launcher, window, now = _session()
+    controller.handoff_completed.connect(lambda: completed.append(None))
+
+    controller.start(defer_media=True)
+    assert launcher.called.wait(timeout=1)
+
+    now[0] = 60.0
+    controller.tick()
+
+    assert media.opened_path is None
+    assert window.close_calls == 1
+    assert completed == [None]
 
 
 def test_window_probe_can_run_without_blocking_the_ui_thread() -> None:
@@ -357,10 +454,9 @@ def test_does_not_retry_launch_after_codex_window_appears() -> None:
     assert launcher.wait_for_calls(2) is False
 
 
-def test_does_not_retry_while_window_is_present_but_content_is_not_ready() -> None:
+def test_does_not_retry_while_window_is_present() -> None:
     controller, _media, launcher, _window, now = _session(
         window_finder=lambda _config: _existing_window(),
-        content_ready_finder=lambda: False,
     )
     controller.start()
     assert launcher.wait_for_calls(1)
@@ -402,7 +498,7 @@ def test_reactivates_when_a_reused_closing_window_disappears() -> None:
     assert launcher.wait_for_calls(2)
 
 
-def test_waits_for_existing_window_before_reactivating_launch() -> None:
+def test_does_not_reactivate_after_stable_frame_disappears() -> None:
     visible = [True]
 
     def finder(_config: AppConfig) -> WindowInfo | None:
@@ -410,7 +506,6 @@ def test_waits_for_existing_window_before_reactivating_launch() -> None:
 
     controller, _media, launcher, _window, now = _session(
         window_finder=finder,
-        content_ready_finder=lambda: False,
     )
     controller.start()
     assert launcher.wait_for_calls(1)
@@ -427,7 +522,7 @@ def test_waits_for_existing_window_before_reactivating_launch() -> None:
 
     now[0] = 8.0
     controller.tick()
-    assert launcher.wait_for_calls(2)
+    assert launcher.calls == 1
 
 
 def test_dwm_transition_updates_destination_and_opacity() -> None:
@@ -476,7 +571,27 @@ def test_dwm_registration_failure_uses_window_opacity_fallback() -> None:
     assert window.opacities[-1] < 1.0
 
 
-def test_timeout_exits_wait_and_hands_off_once() -> None:
+def test_successful_dwm_handoff_skips_second_window_fade() -> None:
+    dwm = FakeDwmController()
+    controller, media, launcher, window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+        dwm=dwm,
+    )
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    media.position = 7.65
+    controller.tick()
+    controller.handoff(HandoffReason.COMPLETED)
+
+    assert dwm.update_calls
+    assert window.fade_calls == 0
+    assert window.close_calls == 1
+
+
+def test_media_finish_without_target_hands_off_after_short_hold() -> None:
     exits: list[None] = []
     completed: list[None] = []
     controller, media, launcher, window, now = _session(
@@ -491,7 +606,7 @@ def test_timeout_exits_wait_and_hands_off_once() -> None:
     now[0] = 60.0
     controller.tick()
 
-    assert window.waiting_states == [True, False]
+    assert True not in window.waiting_states
     assert len(exits) == 1
     assert len(completed) == 1
 
@@ -524,7 +639,7 @@ def test_handoff_is_idempotent() -> None:
     assert len(completed) == 1
 
 
-def test_window_finder_failure_is_treated_as_codex_not_ready() -> None:
+def test_window_finder_failure_does_not_pause_animation() -> None:
     def failing_finder(_config: AppConfig) -> WindowInfo | None:
         raise OSError("window enumeration failed")
 
@@ -538,9 +653,6 @@ def test_window_finder_failure_is_treated_as_codex_not_ready() -> None:
     controller.tick()
 
     assert media.pause_calls == []
-    media.position = 8.0
-    media.finished.emit()
-    assert media.pause_calls == [pytest.approx(7.95)]
 
 
 def test_skip_without_detected_codex_exits_without_blocking_error() -> None:
@@ -571,117 +683,25 @@ def test_stable_codex_window_stays_ready_after_transient_probe_failure() -> None
     assert media.pause_calls == []
 
 
-def test_window_shell_is_not_ready_until_primary_renderer_is_mounted() -> None:
-    content_ready = [False]
+def test_stable_window_enables_handoff_without_content_marker() -> None:
     dwm = FakeDwmController()
-    controller, media, launcher, _window, now = _session(
+    controller, media, launcher, _window, _now = _session(
         window_finder=lambda _config: _existing_window(),
-        content_ready_finder=lambda: content_ready[0],
         dwm=dwm,
     )
     controller.start()
     assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
 
     media.position = 7.2
     controller.tick()
-    controller.tick()
-    controller.tick()
 
-    assert dwm.register_calls == []
     assert media.pause_calls == []
-
-    content_ready[0] = True
-    now[0] = 1.0
-    controller.tick()
-
-    assert dwm.register_calls == [4321]
-    assert media.resume_calls == 0
-
-
-def test_stable_window_falls_back_to_ready_after_eight_seconds() -> None:
-    dwm = FakeDwmController()
-    controller, media, launcher, _window, now = _session(
-        window_finder=lambda _config: _existing_window(),
-        content_ready_finder=lambda: False,
-        dwm=dwm,
-    )
-    controller.start()
-    assert launcher.called.wait(timeout=1)
-    controller.tick()
-    controller.tick()
-
-    media.position = 7.2
-    now[0] = 7.99
-    controller.tick()
-    assert dwm.register_calls == []
-
-    now[0] = 8.0
-    controller.tick()
     assert dwm.register_calls == [4321]
 
 
-def test_transient_window_probe_miss_does_not_reset_ready_fallback() -> None:
-    probes = [0]
-    dwm = FakeDwmController()
-
-    def flickering_finder(_config: AppConfig) -> WindowInfo | None:
-        probes[0] += 1
-        return _existing_window() if probes[0] in {1, 3, 4} else None
-
-    controller, media, launcher, _window, now = _session(
-        window_finder=flickering_finder,
-        content_ready_finder=lambda: False,
-        dwm=dwm,
-    )
-    controller.start()
-    assert launcher.called.wait(timeout=1)
-    controller.tick()
-    controller.tick()
-    now[0] = 8.0
-    controller.tick()
-    media.position = 7.2
-    controller.tick()
-
-    assert dwm.register_calls == [4321]
-
-
-def test_media_finish_does_not_close_before_renderer_is_mounted() -> None:
-    controller, media, launcher, window, _now = _session(
-        content_ready_finder=lambda: False,
-    )
-    controller.start()
-    assert launcher.called.wait(timeout=1)
-
-    media.position = 8.0
-    media.finished.emit()
-    controller.tick()
-
-    assert window.close_calls == 0
-    assert window.waiting_states == [True]
-    assert media.pause_calls == [pytest.approx(7.95)]
-    assert media.plain_pause_calls == 0
-
-
-def test_media_pauses_before_end_of_media_to_hold_last_frame() -> None:
-    controller, media, launcher, window, _now = _session(
-        content_ready_finder=lambda: False,
-    )
-    controller.start()
-    assert launcher.called.wait(timeout=1)
-
-    media.position = 7.95
-    media.position_changed.emit(7950)
-    assert media.pause_calls == [pytest.approx(7.95)]
-    assert window.waiting_states == [True]
-
-    media.finished.emit()
-
-    assert media.pause_calls == [pytest.approx(7.95)]
-    assert window.waiting_states == [True]
-    assert window.close_calls == 0
-
-
-def test_media_finish_holds_final_frame_for_two_point_five_seconds() -> None:
+def test_media_finish_hands_off_from_stable_frame_before_content_mounts() -> None:
     controller, media, launcher, window, now = _session(
         window_finder=lambda _config: _existing_window(),
     )
@@ -692,16 +712,70 @@ def test_media_finish_holds_final_frame_for_two_point_five_seconds() -> None:
 
     media.position = 8.0
     media.finished.emit()
-    now[0] = 2.49
+    now[0] = 0.2
+    controller.tick()
+
+    assert True not in window.waiting_states
+    assert media.pause_calls == [pytest.approx(7.95)]
+    assert media.plain_pause_calls == 0
+    assert window.fade_calls == 1
+    assert window.close_calls == 1
+
+
+def test_media_pauses_before_end_of_media_to_hold_last_frame() -> None:
+    controller, media, launcher, window, _now = _session()
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+
+    media.position = 7.95
+    media.position_changed.emit(7950)
+    assert media.pause_calls == [pytest.approx(7.95)]
+    assert True not in window.waiting_states
+
+    media.finished.emit()
+
+    assert media.pause_calls == [pytest.approx(7.95)]
+    assert True not in window.waiting_states
+    assert window.close_calls == 0
+
+
+def test_media_finish_holds_final_frame_for_point_two_seconds() -> None:
+    controller, media, launcher, window, now = _session(
+        window_finder=lambda _config: _existing_window(),
+    )
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    media.position = 8.0
+    media.finished.emit()
+    now[0] = 0.19
     controller.tick()
     assert window.close_calls == 0
     assert media.pause_calls == [pytest.approx(7.95)]
     assert media.plain_pause_calls == 0
 
-    now[0] = 2.5
+    now[0] = 0.2
     controller.tick()
     assert window.fade_calls == 1
     assert window.close_calls == 1
+
+
+def test_animation_does_not_show_waiting_text_during_final_hold() -> None:
+    controller, media, launcher, window, _now = _session(
+        window_finder=lambda _config: _existing_window(),
+    )
+    controller.start()
+    assert launcher.called.wait(timeout=1)
+    controller.tick()
+    controller.tick()
+
+    media.position = 8.0
+    media.finished.emit()
+
+    assert True not in window.waiting_states
+    assert window.close_calls == 0
 
 
 def test_skip_handoff_also_uses_fade_before_close() -> None:

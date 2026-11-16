@@ -14,7 +14,8 @@ foreach ($Required in @(
     "media\startup.mp4",
     "media\poster.png",
     "media\wallpaper.jpg",
-    "config\launcher.example.json"
+    "config\launcher.example.json",
+    "LICENSE"
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $Required))) {
         throw "Required build asset is missing: $Required"
@@ -42,6 +43,8 @@ try {
     Copy-Item -LiteralPath "media\wallpaper.jpg" `
         -Destination $MediaOutput -Force
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" `
+        -Destination $OutputRoot -Force
+    Copy-Item -LiteralPath "LICENSE" `
         -Destination $OutputRoot -Force
 }
 finally {

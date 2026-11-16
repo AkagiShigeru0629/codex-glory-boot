@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtTest import QTest
 
 import glory_boot.ui.application as application_module
@@ -10,9 +10,9 @@ from glory_boot.adapters.win32 import WindowInfo
 from glory_boot.domain.models import AppConfig, Rect, ScreenFrame, SkinConfig
 from glory_boot.domain.skin import SkinProfile
 from glory_boot.services.codex_launcher import FallbackProcessBackend, LaunchResult
+from glory_boot.services.skin import SkinState
 from glory_boot.ui.application import (
     LauncherApplication,
-    REVEAL_FALLBACK_MS,
     SkinLaunchOptions,
     build_process_backend,
     build_skin_controller,
@@ -42,7 +42,6 @@ def _app_config(
         video_path="startup.mp4",
         poster_path="poster.png",
         duration=8.0,
-        hold_at=6.4,
         transition_start=6.7,
         transition_end=7.6,
         max_wait_seconds=60.0,
@@ -80,10 +79,6 @@ def test_cli_disable_skin_overrides_enabled_config() -> None:
     assert calls == []
 
 
-def test_reveal_fallback_allows_slow_codex_window_startup() -> None:
-    assert REVEAL_FALLBACK_MS >= 10_000
-
-
 def test_enabled_skin_allocates_one_loopback_port(
     tmp_path: Path,
 ) -> None:
@@ -94,7 +89,6 @@ def test_enabled_skin_allocates_one_loopback_port(
         ),
         skin_disabled_by_cli=False,
         benchmark=False,
-        codex_version=SUPPORTED_VERSION,
         skin_profiles=(SKIN_PROFILE,),
         port_allocator=lambda: 50123,
     )
@@ -118,7 +112,6 @@ def test_enabled_skin_requires_existing_wallpaper(
         ),
         skin_disabled_by_cli=False,
         benchmark=False,
-        codex_version=SUPPORTED_VERSION,
         skin_profiles=(SKIN_PROFILE,),
         port_allocator=lambda: calls.append(None) or 50123,
     )
@@ -127,10 +120,8 @@ def test_enabled_skin_requires_existing_wallpaper(
     assert calls == []
 
 
-@pytest.mark.parametrize("codex_version", [None, "99.0.0.0"])
-def test_enabled_skin_requires_supported_codex_version(
+def test_enabled_skin_opens_debug_port_until_activated_version_is_known(
     tmp_path: Path,
-    codex_version: str | None,
 ) -> None:
     calls: list[None] = []
     options = prepare_skin_launch(
@@ -140,13 +131,29 @@ def test_enabled_skin_requires_supported_codex_version(
         ),
         skin_disabled_by_cli=False,
         benchmark=False,
-        codex_version=codex_version,
         skin_profiles=(SKIN_PROFILE,),
         port_allocator=lambda: calls.append(None) or 50123,
     )
 
+    assert options.skin_enabled is True
+    assert options.skin_port == 50123
+    assert options.launch_arguments
+    assert calls == [None]
+
+
+def test_enabled_skin_requires_registered_profiles(tmp_path: Path) -> None:
+    options = prepare_skin_launch(
+        _app_config(
+            skin_enabled=True,
+            wallpaper_path=str(_wallpaper(tmp_path)),
+        ),
+        skin_disabled_by_cli=False,
+        benchmark=False,
+        skin_profiles=(),
+        port_allocator=lambda: 50123,
+    )
+
     assert options == SkinLaunchOptions(False, None, "")
-    assert calls == []
 
 
 def test_skin_without_wallpaper_does_not_open_debug_port() -> None:
@@ -226,6 +233,23 @@ class FakeSkinController:
         self.close_calls += 1
 
 
+class BackgroundSkin:
+    def __init__(self) -> None:
+        self.state = SkinState.WAITING
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class QuitApplication:
+    def __init__(self) -> None:
+        self.quit_calls = 0
+
+    def quit(self) -> None:
+        self.quit_calls += 1
+
+
 def test_build_skin_controller_uses_launch_port_and_profile(
     tmp_path: Path,
 ) -> None:
@@ -247,6 +271,7 @@ def test_build_skin_controller_uses_launch_port_and_profile(
 
     assert controller is fake
     assert calls[0]["port"] == 50123
+    assert calls[0]["timeout_ms"] == 60_000
     assert calls[0]["profiles"] == (SKIN_PROFILE,)
     assert build_skin_controller(
         _app_config(skin_enabled=False, wallpaper_path=None),
@@ -275,6 +300,26 @@ def test_application_starts_and_closes_skin_from_launch_result() -> None:
 
     assert fake.starts == [9876, None]
     assert fake.close_calls == 1
+
+
+def test_handoff_keeps_skin_alive_until_background_install_finishes() -> None:
+    application = object.__new__(LauncherApplication)
+    application.skin = BackgroundSkin()  # type: ignore[assignment]
+    application._skin_started = True
+    application._handoff_completed = True
+    application._skip_requested = False
+    application._qt_app = QuitApplication()  # type: ignore[assignment]
+
+    application._request_exit()
+
+    assert application.skin.close_calls == 0
+    assert application._qt_app.quit_calls == 0
+
+    application.skin.state = SkinState.INSTALLED
+    application._on_skin_state_changed(SkinState.INSTALLED.value)
+
+    assert application.skin.close_calls == 1
+    assert application._qt_app.quit_calls == 1
 
 
 def test_benchmark_never_enables_skin() -> None:
@@ -410,6 +455,9 @@ class PresentationWindow:
     def show(self) -> None:
         self.calls.append("show")
 
+    def setWindowOpacity(self, opacity: float) -> None:
+        self.calls.append(f"opacity:{opacity:.1f}")
+
     def close(self) -> None:
         self.calls.append("close")
 
@@ -442,15 +490,74 @@ class RevealSession:
         self.calls.append("begin_media")
 
 
-class StopTimer:
+class PassThroughWindowGate:
+    def release_all(self) -> bool:
+        return True
+
+
+class ColdStartWindow:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
 
-    def stop(self) -> None:
-        self.calls.append("stop_timer")
+    def show_poster_first(self, _path: str) -> None:
+        self.calls.append("prepare_poster")
 
 
-def test_present_initial_window_reapplies_rect_after_showing(qapp) -> None:
+class ColdStartSession:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    def start(self, *, defer_media: bool = False) -> None:
+        self.calls.append(f"session_start:{defer_media}")
+
+
+class ColdStartApplication:
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self._quit_on_last_window = True
+
+    def exec(self) -> int:
+        self.calls.append("event_loop")
+        return 0
+
+    def quitOnLastWindowClosed(self) -> bool:
+        return self._quit_on_last_window
+
+    def setQuitOnLastWindowClosed(self, enabled: bool) -> None:
+        self._quit_on_last_window = enabled
+        self.calls.append(f"quit_on_last_window:{enabled}")
+
+
+class AvailableGuard:
+    already_running = False
+
+    def __enter__(self) -> "AvailableGuard":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class CapturingSession(QObject):
+    handoff_completed = Signal()
+    handoff_started = Signal()
+    launch_result_ready = Signal(object)
+
+    def __init__(self, *_args: object, **kwargs: object) -> None:
+        super().__init__()
+        self.kwargs = kwargs
+
+
+class AlignmentPlacement:
+    def __init__(self) -> None:
+        self.aligned_hwnds: list[int] = []
+
+    def align(self, window: WindowInfo) -> bool:
+        self.aligned_hwnds.append(window.hwnd)
+        return True
+
+
+def test_present_initial_window_places_rect_before_showing(qapp) -> None:
     window = PresentationWindow()
     application = PresentationApplication()
     application.calls = window.calls
@@ -468,9 +575,13 @@ def test_present_initial_window_reapplies_rect_after_showing(qapp) -> None:
     )
 
     assert window.calls == [
-        "show",
         "winId",
         "place:900:-1200,40,1400,820",
+        "opacity:0.0",
+        "show",
+        "place:900:-1200,40,1400,820",
+        "processEvents",
+        "opacity:1.0",
         "processEvents",
         "mark:window_visible",
     ]
@@ -528,7 +639,7 @@ def test_reveal_locks_target_before_first_events_and_starting_media(
     application._timer.calls = calls
     application.media = object()
     application.session = RevealSession(calls)
-    application._reveal_timer = StopTimer(calls)
+    application._window_gate = PassThroughWindowGate()
     application._window_visible = False
     monkeypatch.setattr(
         application_module,
@@ -538,8 +649,229 @@ def test_reveal_locks_target_before_first_events_and_starting_media(
 
     application._reveal_window()
 
-    assert calls.index("show") < calls.index("place")
-    assert calls.index("place") < calls.index("processEvents")
+    assert calls.index("place") < calls.index("show")
+    assert calls.index("opacity:0.0") < calls.index("show")
+    assert calls.index("show") < calls.index("opacity:1.0")
     assert calls.index("processEvents") < calls.index("attach_media")
     assert calls.index("attach_media") < calls.index("begin_media")
     assert application._window_visible is True
+
+
+def test_cold_start_waits_for_codex_instead_of_using_timed_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    application = object.__new__(LauncherApplication)
+    application._config = _app_config(
+        skin_enabled=False,
+        wallpaper_path=None,
+    )
+    application._focus_existing_codex = lambda: False
+    application.window = ColdStartWindow(calls)
+    application.session = ColdStartSession(calls)
+    application._qt_app = ColdStartApplication(calls)
+    application._close_skin = lambda: calls.append("close_skin")
+    application._window_gate = PassThroughWindowGate()
+    monkeypatch.setattr(
+        application_module,
+        "SingleInstanceGuard",
+        AvailableGuard,
+    )
+
+    assert application.run(benchmark=False) == 0
+    assert calls == [
+        "quit_on_last_window:False",
+        "prepare_poster",
+        "session_start:True",
+        "event_loop",
+        "close_skin",
+        "quit_on_last_window:True",
+    ]
+
+
+def test_handoff_before_codex_reveals_poster_without_starting_media() -> None:
+    calls: list[str] = []
+    application = object.__new__(LauncherApplication)
+    application.window = RevealWindow()
+    application.window.calls = calls
+    application._placement = Placement()
+    application._qt_app = PresentationApplication()
+    application._qt_app.calls = calls
+    application._timer = PresentationTimer()
+    application._timer.calls = calls
+    application.session = RevealSession(calls)
+    application._window_gate = PassThroughWindowGate()
+    application._window_visible = False
+
+    application._reveal_for_handoff()
+
+    assert "show" in calls
+    assert "attach_media" not in calls
+    assert "begin_media" not in calls
+    assert application._window_visible is True
+
+
+def test_visible_launcher_does_not_realign_after_window_appears() -> None:
+    placement = AlignmentPlacement()
+    application = object.__new__(LauncherApplication)
+    application._window_visible = True
+    application._placement = placement
+    application._timer = PresentationTimer()
+    application._timer.calls = []
+    application._target_aligned = False
+
+    application._align_target_window(
+        WindowInfo(
+            hwnd=4321,
+            pid=9876,
+            process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+            client_rect=Rect(0, 0, 1920, 1032),
+            responsive=True,
+        )
+    )
+
+    assert placement.aligned_hwnds == []
+    assert application._target_aligned is False
+
+
+def test_target_alignment_uses_notified_window_without_other_process_requery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    placement = AlignmentPlacement()
+    application = object.__new__(LauncherApplication)
+    application._config = _app_config(
+        skin_enabled=True,
+        wallpaper_path="wallpaper.png",
+    )
+    application._window_visible = False
+    application._placement = placement
+    application._timer = PresentationTimer()
+    application._timer.calls = []
+    application._target_aligned = False
+    revealed: list[None] = []
+    monkeypatch.setattr(
+        application,
+        "_reveal_window",
+        lambda: revealed.append(None),
+    )
+    early_window = WindowInfo(
+        hwnd=1111,
+        pid=9876,
+        process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+        client_rect=Rect(0, 0, 1280, 720),
+        responsive=True,
+    )
+    monkeypatch.setattr(
+        application_module,
+        "find_codex_window",
+        lambda _config: pytest.fail("几何回调不应重新查询其他进程窗口"),
+    )
+
+    application._align_target_window(early_window)
+
+    assert placement.aligned_hwnds == [1111]
+    assert revealed == [None]
+
+
+def test_failed_alignment_does_not_reveal_saved_fullscreen_rect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = object.__new__(LauncherApplication)
+    application._config = _app_config(
+        skin_enabled=False,
+        wallpaper_path=None,
+    )
+    application._window_visible = False
+    application._placement = type(
+        "FailingPlacement",
+        (),
+        {"align": lambda self, _window: False},
+    )()
+    application._timer = PresentationTimer()
+    application._timer.calls = []
+    application._target_aligned = False
+    revealed: list[None] = []
+    monkeypatch.setattr(
+        application_module,
+        "find_codex_window",
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        application,
+        "_reveal_window",
+        lambda: revealed.append(None),
+    )
+
+    application._align_target_window(
+        WindowInfo(
+            hwnd=4321,
+            pid=9876,
+            process_path=r"C:\Apps\OpenAI.Codex_x\ChatGPT.exe",
+            client_rect=Rect(0, 0, 1920, 1032),
+            responsive=True,
+        )
+    )
+
+    assert revealed == []
+    assert "mark:window_align_failed" in application._timer.calls
+
+
+def test_application_aligns_only_after_window_is_stable(
+    qapp,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[CapturingSession] = []
+
+    def create_session(*args: object, **kwargs: object) -> CapturingSession:
+        session = CapturingSession(*args, **kwargs)
+        captured.append(session)
+        return session
+
+    monkeypatch.setattr(application_module, "SessionController", create_session)
+    application = LauncherApplication(
+        root=tmp_path,
+        config=_app_config(
+            skin_enabled=False,
+            wallpaper_path=None,
+        ),
+        qt_app=qapp,
+        timer=application_module.StageTimer(),
+    )
+
+    assert (
+        captured[0].kwargs["target_found_callback"]
+        == application._conceal_target_window
+    )
+    assert (
+        captured[0].kwargs["target_stable_callback"]
+        == application._align_target_window
+    )
+    application.window.close()
+
+
+def test_startup_video_fits_entire_frame_to_launcher(qapp) -> None:
+    window = BootWindow()
+
+    assert (
+        window.video.aspectRatioMode()
+        == Qt.AspectRatioMode.IgnoreAspectRatio
+    )
+    window.close()
+
+
+def test_startup_poster_fits_entire_frame_to_launcher(qapp, tmp_path: Path) -> None:
+    poster_path = tmp_path / "poster.png"
+    Image.new("RGB", (160, 90), "#112233").save(poster_path)
+    window = BootWindow()
+    window.resize(100, 100)
+
+    window.show_poster_first(str(poster_path))
+    window.show()
+    qapp.processEvents()
+
+    pixmap = window.poster.pixmap()
+    assert pixmap is not None
+    assert pixmap.width() == window.width()
+    assert pixmap.height() == window.height()
+    window.close()
