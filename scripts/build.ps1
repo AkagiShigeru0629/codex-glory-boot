@@ -13,6 +13,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 foreach ($Required in @(
     "assets\app-icon.ico",
     "assets\app-icon.png",
+    "assets\taskbar-icon.ico",
     "media\startup.mp4",
     "media\poster.png",
     "media\wallpaper.jpg",
@@ -49,6 +50,8 @@ try {
     Copy-Item -LiteralPath "assets\app-icon.png" `
         -Destination $AssetOutput -Force
     Copy-Item -LiteralPath "assets\app-icon.ico" `
+        -Destination $AssetOutput -Force
+    Copy-Item -LiteralPath "assets\taskbar-icon.ico" `
         -Destination $AssetOutput -Force
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" `
         -Destination $OutputRoot -Force

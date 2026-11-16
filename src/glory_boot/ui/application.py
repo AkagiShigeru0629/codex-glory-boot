@@ -9,11 +9,17 @@ from PySide6.QtWidgets import QApplication
 
 from glory_boot.adapters.codex_runtime import CodexRuntimeStore
 from glory_boot.adapters.win32 import (
+    WindowAppIdentity,
     WindowInfo,
+    WindowIconHandles,
     cursor_work_area,
     find_codex_window,
     focus_window,
     monitor_work_areas,
+    release_window_app_identity,
+    release_window_icons,
+    set_window_app_identity,
+    set_window_icon,
     set_window_rect,
     window_screen_rect,
 )
@@ -262,6 +268,8 @@ class LauncherApplication:
         )
         self._benchmark = benchmark
         self._window_visible = False
+        self._window_identity: WindowAppIdentity | None = None
+        self._window_icons: WindowIconHandles | None = None
         self.skin = build_skin_controller(
             config,
             root=root,
@@ -308,6 +316,7 @@ class LauncherApplication:
             qt_app=self._qt_app,
             timer=self._timer,
         )
+        self._apply_taskbar_icon()
         if start_media:
             self._window_gate.release_all()
             self.window.attach_media(self.media)
@@ -315,6 +324,28 @@ class LauncherApplication:
         else:
             self._window_gate.release_all()
         self._window_visible = True
+
+    def _apply_taskbar_icon(self) -> None:
+        if self._window_icons is not None:
+            return
+        identity: WindowAppIdentity | None = None
+        icons: WindowIconHandles | None = None
+        try:
+            hwnd = int(self.window.winId())
+            icon_path = self._root / "assets" / "taskbar-icon.ico"
+            identity = set_window_app_identity(
+                hwnd,
+                "Glory.Codex.Boot",
+                icon_path,
+            )
+            icons = set_window_icon(hwnd, icon_path)
+            self._window_identity = identity
+            self._window_icons = icons
+            self._timer.mark("taskbar_icon_applied")
+        except OSError:
+            release_window_app_identity(identity)
+            release_window_icons(icons)
+            self._timer.mark("taskbar_icon_failed")
 
     def _reveal_for_handoff(self) -> None:
         if not self._window_visible:
@@ -415,6 +446,12 @@ class LauncherApplication:
                     self._timer.mark("benchmark_exit")
                 return exit_code
         finally:
+            release_window_app_identity(
+                getattr(self, "_window_identity", None)
+            )
+            release_window_icons(getattr(self, "_window_icons", None))
+            self._window_identity = None
+            self._window_icons = None
             self._qt_app.setQuitOnLastWindowClosed(quit_on_last_window)
 
 

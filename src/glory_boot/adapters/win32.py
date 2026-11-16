@@ -5,7 +5,10 @@ import struct
 from collections.abc import Iterable
 from ctypes import wintypes
 from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PureWindowsPath
+from typing import Protocol
+from uuid import UUID
 
 from glory_boot.domain.models import AppConfig, Rect
 
@@ -19,6 +22,20 @@ DWMWA_CLOAKED = 14
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WM_NULL = 0x0000
+WM_SETICON = 0x0080
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x0010
+ICON_SMALL = 0
+ICON_BIG = 1
+SM_CXICON = 11
+SM_CYICON = 12
+SM_CXSMICON = 49
+SM_CYSMICON = 50
+VT_EMPTY = 0
+VT_LPWSTR = 31
+APP_USER_MODEL_FORMAT_ID = UUID("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3")
+APP_USER_MODEL_ID_KEY = (APP_USER_MODEL_FORMAT_ID, 5)
+RELAUNCH_ICON_KEY = (APP_USER_MODEL_FORMAT_ID, 3)
 SMTO_ABORTIFHUNG = 0x0002
 SW_RESTORE = 9
 HWND_TOPMOST = -1
@@ -68,6 +85,28 @@ class WindowTransparencyState:
     layered_flags: int
 
 
+@dataclass(frozen=True, slots=True)
+class WindowIconHandles:
+    big: int
+    small: int
+
+
+class WindowPropertyStore(Protocol):
+    def set_string(self, key: tuple[UUID, int], value: str) -> None:
+        ...
+
+    def clear(self, key: tuple[UUID, int]) -> None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class WindowAppIdentity:
+    store: WindowPropertyStore
+
+
 class RECT(ctypes.Structure):
     _fields_ = [
         ("left", wintypes.LONG),
@@ -93,6 +132,39 @@ class MONITORINFO(ctypes.Structure):
     ]
 
 
+class GUID(ctypes.Structure):
+    _fields_ = [
+        ("Data1", wintypes.DWORD),
+        ("Data2", wintypes.WORD),
+        ("Data3", wintypes.WORD),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class PROPERTYKEY(ctypes.Structure):
+    _fields_ = [
+        ("fmtid", GUID),
+        ("pid", wintypes.DWORD),
+    ]
+
+
+class PROPVARIANT_VALUE(ctypes.Union):
+    _fields_ = [
+        ("pwszVal", wintypes.LPWSTR),
+        ("_padding", ctypes.c_byte * 16),
+    ]
+
+
+class PROPVARIANT(ctypes.Structure):
+    _fields_ = [
+        ("vt", wintypes.USHORT),
+        ("wReserved1", wintypes.USHORT),
+        ("wReserved2", wintypes.USHORT),
+        ("wReserved3", wintypes.USHORT),
+        ("value", PROPVARIANT_VALUE),
+    ]
+
+
 class MIB_TCPROW_OWNER_PID(ctypes.Structure):
     _fields_ = [
         ("dwState", wintypes.DWORD),
@@ -105,6 +177,7 @@ class MIB_TCPROW_OWNER_PID(ctypes.Structure):
 
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
+_shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _dwmapi = ctypes.WinDLL("dwmapi", use_last_error=True)
 _iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
@@ -197,6 +270,121 @@ _user32.SetLayeredWindowAttributes.argtypes = [
     wintypes.DWORD,
 ]
 _user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+_user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+_user32.GetSystemMetrics.restype = ctypes.c_int
+_user32.LoadImageW.argtypes = [
+    wintypes.HINSTANCE,
+    wintypes.LPCWSTR,
+    wintypes.UINT,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+_user32.LoadImageW.restype = wintypes.HANDLE
+_user32.SendMessageW.argtypes = [
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+]
+_user32.SendMessageW.restype = wintypes.LPARAM
+_user32.DestroyIcon.argtypes = [wintypes.HICON]
+_user32.DestroyIcon.restype = wintypes.BOOL
+_shell32.SHGetPropertyStoreForWindow.argtypes = [
+    wintypes.HWND,
+    ctypes.POINTER(GUID),
+    ctypes.POINTER(ctypes.c_void_p),
+]
+_shell32.SHGetPropertyStoreForWindow.restype = ctypes.c_long
+
+_IID_PROPERTY_STORE = GUID(
+    0x886D8EEB,
+    0x8CF2,
+    0x4446,
+    (ctypes.c_ubyte * 8)(0x8D, 0x02, 0xCD, 0xBA, 0x1D, 0xBD, 0xCF, 0x99),
+)
+_SET_VALUE = ctypes.WINFUNCTYPE(
+    ctypes.c_long,
+    ctypes.c_void_p,
+    ctypes.POINTER(PROPERTYKEY),
+    ctypes.POINTER(PROPVARIANT),
+)
+_RELEASE = ctypes.WINFUNCTYPE(
+    ctypes.c_ulong,
+    ctypes.c_void_p,
+)
+
+
+def _guid(value: UUID) -> GUID:
+    return GUID.from_buffer_copy(value.bytes_le)
+
+
+def _property_key(key: tuple[UUID, int]) -> PROPERTYKEY:
+    return PROPERTYKEY(fmtid=_guid(key[0]), pid=key[1])
+
+
+def _vtable_entry(store: int, index: int) -> int:
+    table = ctypes.cast(
+        store,
+        ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)),
+    ).contents
+    return int(table[index])
+
+
+class _NativeWindowPropertyStore:
+    def __init__(self, store: int) -> None:
+        self._store = store
+
+    def set_string(self, key: tuple[UUID, int], value: str) -> None:
+        variant = PROPVARIANT()
+        variant.vt = VT_LPWSTR
+        variant.value.pwszVal = value
+        self._set_value(key, variant)
+
+    def clear(self, key: tuple[UUID, int]) -> None:
+        self._set_value(key, PROPVARIANT())
+
+    def _set_value(
+        self,
+        key: tuple[UUID, int],
+        variant: PROPVARIANT,
+    ) -> None:
+        property_key = _property_key(key)
+        function = _SET_VALUE(_vtable_entry(self._store, 6))
+        result = int(
+            function(
+                ctypes.c_void_p(self._store),
+                ctypes.byref(property_key),
+                ctypes.byref(variant),
+            )
+        )
+        if result < 0:
+            raise Win32Error(
+                f"无法设置窗口任务栏属性: HRESULT {result & 0xFFFFFFFF:08X}"
+            )
+
+    def close(self) -> None:
+        if self._store <= 0:
+            return
+        function = _RELEASE(_vtable_entry(self._store, 2))
+        function(ctypes.c_void_p(self._store))
+        self._store = 0
+
+
+def _open_window_property_store(hwnd: int) -> WindowPropertyStore:
+    store = ctypes.c_void_p()
+    result = int(
+        _shell32.SHGetPropertyStoreForWindow(
+            hwnd,
+            ctypes.byref(_IID_PROPERTY_STORE),
+            ctypes.byref(store),
+        )
+    )
+    if result < 0 or not store.value:
+        raise Win32Error(
+            f"无法读取窗口任务栏属性: HRESULT {result & 0xFFFFFFFF:08X}"
+        )
+    return _NativeWindowPropertyStore(int(store.value))
 
 _get_window_long = getattr(
     _user32,
@@ -428,6 +616,102 @@ def set_window_rect(hwnd: int, rect: Rect) -> None:
     )
     if not result:
         raise Win32Error("无法设置启动器窗口矩形")
+
+
+def set_window_icon(hwnd: int, path: Path) -> WindowIconHandles:
+    """为运行中窗口设置独立的任务栏大、小图标。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+    icon_path = Path(path).resolve()
+    if not icon_path.is_file():
+        raise Win32Error(f"找不到任务栏图标: {icon_path}")
+
+    big_size = (
+        _user32.GetSystemMetrics(SM_CXICON),
+        _user32.GetSystemMetrics(SM_CYICON),
+    )
+    small_size = (
+        _user32.GetSystemMetrics(SM_CXSMICON),
+        _user32.GetSystemMetrics(SM_CYSMICON),
+    )
+    big = int(
+        _user32.LoadImageW(
+            0,
+            str(icon_path),
+            IMAGE_ICON,
+            big_size[0],
+            big_size[1],
+            LR_LOADFROMFILE,
+        )
+    )
+    if not big:
+        raise Win32Error("无法加载任务栏大图标")
+
+    small = int(
+        _user32.LoadImageW(
+            0,
+            str(icon_path),
+            IMAGE_ICON,
+            small_size[0],
+            small_size[1],
+            LR_LOADFROMFILE,
+        )
+    )
+    if not small:
+        _user32.DestroyIcon(big)
+        raise Win32Error("无法加载任务栏小图标")
+
+    _user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
+    _user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+    return WindowIconHandles(big=big, small=small)
+
+
+def release_window_icons(handles: WindowIconHandles | None) -> None:
+    """释放由 set_window_icon 创建的图标句柄。"""
+    if handles is None:
+        return
+    destroyed: set[int] = set()
+    for value in (handles.big, handles.small):
+        if value > 0 and value not in destroyed:
+            _user32.DestroyIcon(value)
+            destroyed.add(value)
+
+
+def set_window_app_identity(
+    hwnd: int,
+    app_id: str,
+    icon_path: Path,
+) -> WindowAppIdentity:
+    """给窗口设置显式应用身份和任务栏重建图标。"""
+    if hwnd <= 0:
+        raise Win32Error("hwnd 必须是有效窗口句柄")
+    if not app_id or "\0" in app_id:
+        raise ValueError("app_id 必须是非空字符串")
+    icon = Path(icon_path).resolve()
+    if not icon.is_file():
+        raise Win32Error(f"找不到任务栏图标: {icon}")
+
+    store = _open_window_property_store(hwnd)
+    try:
+        store.set_string(RELAUNCH_ICON_KEY, f"{icon},0")
+        store.set_string(APP_USER_MODEL_ID_KEY, app_id)
+    except Exception:
+        store.clear(RELAUNCH_ICON_KEY)
+        store.clear(APP_USER_MODEL_ID_KEY)
+        store.close()
+        raise
+    return WindowAppIdentity(store)
+
+
+def release_window_app_identity(identity: WindowAppIdentity | None) -> None:
+    """清除窗口任务栏属性并释放属性存储。"""
+    if identity is None:
+        return
+    try:
+        identity.store.clear(RELAUNCH_ICON_KEY)
+        identity.store.clear(APP_USER_MODEL_ID_KEY)
+    finally:
+        identity.store.close()
 
 
 def _monitor_work_rect(monitor: int) -> Rect:

@@ -121,3 +121,32 @@ def test_launcher_icon_contains_windows_sizes_and_is_embedded() -> None:
         encoding="utf-8"
     )
     assert 'icon=str(project_root / "assets" / "app-icon.ico")' in spec_text
+
+
+def test_runtime_taskbar_icon_is_a_separate_replaceable_asset() -> None:
+    icon_path = ROOT / "assets" / "taskbar-icon.ico"
+    assert icon_path.is_file()
+
+    with Image.open(icon_path) as icon:
+        sizes = icon.info["sizes"]
+
+    assert {(16, 16), (24, 24), (32, 32), (48, 48)} <= sizes
+    assert (256, 256) in sizes
+
+    main_text = (ROOT / "src" / "glory_boot" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    application_text = (
+        ROOT / "src" / "glory_boot" / "ui" / "application.py"
+    ).read_text(encoding="utf-8")
+    build_text = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
+    smoke_text = (ROOT / "scripts" / "smoke_test.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'QIcon(str(root / "assets" / "taskbar-icon.ico"))' in main_text
+    assert '"taskbar-icon.ico"' in application_text
+    assert "set_window_app_identity" in application_text
+    assert '"Glory.Codex.Boot"' in application_text
+    assert "assets\\taskbar-icon.ico" in build_text
+    assert '("assets", "taskbar-icon.ico")' in smoke_text

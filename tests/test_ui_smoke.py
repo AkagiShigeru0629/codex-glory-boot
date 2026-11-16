@@ -641,6 +641,7 @@ def test_reveal_locks_target_before_first_events_and_starting_media(
     application.session = RevealSession(calls)
     application._window_gate = PassThroughWindowGate()
     application._window_visible = False
+    application._apply_taskbar_icon = lambda: calls.append("taskbar_icon")
     monkeypatch.setattr(
         application_module,
         "set_window_rect",
@@ -653,6 +654,8 @@ def test_reveal_locks_target_before_first_events_and_starting_media(
     assert calls.index("opacity:0.0") < calls.index("show")
     assert calls.index("show") < calls.index("opacity:1.0")
     assert calls.index("processEvents") < calls.index("attach_media")
+    assert calls.index("processEvents") < calls.index("taskbar_icon")
+    assert calls.index("taskbar_icon") < calls.index("attach_media")
     assert calls.index("attach_media") < calls.index("begin_media")
     assert application._window_visible is True
 
@@ -672,6 +675,8 @@ def test_cold_start_waits_for_codex_instead_of_using_timed_fallback(
     application._qt_app = ColdStartApplication(calls)
     application._close_skin = lambda: calls.append("close_skin")
     application._window_gate = PassThroughWindowGate()
+    application._window_identity = None
+    application._window_icons = None
     monkeypatch.setattr(
         application_module,
         "SingleInstanceGuard",
@@ -702,6 +707,7 @@ def test_handoff_before_codex_reveals_poster_without_starting_media() -> None:
     application.session = RevealSession(calls)
     application._window_gate = PassThroughWindowGate()
     application._window_visible = False
+    application._apply_taskbar_icon = lambda: calls.append("taskbar_icon")
 
     application._reveal_for_handoff()
 

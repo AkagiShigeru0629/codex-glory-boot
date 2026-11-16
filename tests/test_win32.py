@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -8,14 +9,20 @@ from glory_boot.adapters.dwm import DwmController
 from glory_boot.adapters.win32 import (
     RawWindowRecord,
     WindowInfo,
+    WindowAppIdentity,
+    WindowIconHandles,
     Win32Error,
     client_screen_rect,
     conceal_window,
     cursor_work_area,
     monitor_work_areas,
     process_path_for_pid,
+    release_window_app_identity,
     restore_window,
+    release_window_icons,
     select_codex_window,
+    set_window_app_identity,
+    set_window_icon,
     set_window_rect,
     window_screen_rect,
 )
@@ -276,6 +283,70 @@ class FailingDwmApi:
         return -1
 
 
+class FakeIconUser32:
+    def __init__(self) -> None:
+        self.loads: list[tuple[str, int, int, int, int]] = []
+        self.messages: list[tuple[int, int, int, int]] = []
+        self.destroyed: list[int] = []
+
+    def GetSystemMetrics(self, index: int) -> int:
+        return {
+            win32.SM_CXICON: 32,
+            win32.SM_CYICON: 32,
+            win32.SM_CXSMICON: 16,
+            win32.SM_CYSMICON: 16,
+        }[index]
+
+    def LoadImageW(
+        self,
+        instance: int,
+        path: str,
+        image_type: int,
+        width: int,
+        height: int,
+        flags: int,
+    ) -> int:
+        assert instance == 0
+        assert image_type == win32.IMAGE_ICON
+        assert flags == win32.LR_LOADFROMFILE
+        self.loads.append((path, image_type, width, height, flags))
+        return 101 if width == 32 else 102
+
+    def SendMessageW(
+        self,
+        hwnd: int,
+        message: int,
+        wparam: int,
+        lparam: int,
+    ) -> int:
+        self.messages.append((hwnd, message, wparam, lparam))
+        return 0
+
+    def DestroyIcon(self, icon: int) -> int:
+        self.destroyed.append(icon)
+        return 1
+
+
+class FakePropertyStore:
+    def __init__(self) -> None:
+        self.strings: list[tuple[tuple[str, int], str]] = []
+        self.cleared: list[tuple[str, int]] = []
+        self.closed = False
+
+    def set_string(
+        self,
+        key: tuple[str, int],
+        value: str,
+    ) -> None:
+        self.strings.append((key, value))
+
+    def clear(self, key: tuple[str, int]) -> None:
+        self.cleared.append(key)
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_client_screen_rect_converts_client_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,6 +382,78 @@ def test_set_window_rect_uses_physical_rectangle(
     set_window_rect(1001, Rect(150.4, 80.6, 800.2, 600.5))
 
     assert user32.position == (150, 81, 800, 600)
+
+
+def test_taskbar_icon_sets_big_and_small_window_icons(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    user32 = FakeIconUser32()
+    monkeypatch.setattr(win32, "_user32", user32)
+    icon_path = tmp_path / "taskbar-icon.ico"
+    icon_path.write_bytes(b"icon")
+
+    handles = set_window_icon(1001, icon_path)
+
+    assert handles == WindowIconHandles(big=101, small=102)
+    assert user32.loads == [
+        (str(icon_path.resolve()), win32.IMAGE_ICON, 32, 32, win32.LR_LOADFROMFILE),
+        (str(icon_path.resolve()), win32.IMAGE_ICON, 16, 16, win32.LR_LOADFROMFILE),
+    ]
+    assert user32.messages == [
+        (1001, win32.WM_SETICON, win32.ICON_BIG, 101),
+        (1001, win32.WM_SETICON, win32.ICON_SMALL, 102),
+    ]
+
+    release_window_icons(handles)
+
+    assert user32.destroyed == [101, 102]
+
+
+def test_taskbar_icon_rejects_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(Win32Error, match="找不到任务栏图标"):
+        set_window_icon(1001, tmp_path / "missing.ico")
+
+
+def test_taskbar_identity_sets_relaunch_icon_before_app_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    store = FakePropertyStore()
+    monkeypatch.setattr(
+        win32,
+        "_open_window_property_store",
+        lambda hwnd: store,
+    )
+    icon_path = tmp_path / "taskbar-icon.ico"
+    icon_path.write_bytes(b"icon")
+
+    identity = set_window_app_identity(
+        1001,
+        "Glory.Codex.Boot",
+        icon_path,
+    )
+
+    assert isinstance(identity, WindowAppIdentity)
+    assert [key[1] for key, _value in store.strings] == [3, 5]
+    assert store.strings[0][1] == f"{icon_path.resolve()},0"
+    assert store.strings[1][1] == "Glory.Codex.Boot"
+
+    release_window_app_identity(identity)
+
+    assert [key[1] for key in store.cleared] == [3, 5]
+    assert store.closed is True
+
+
+def test_taskbar_identity_rejects_missing_icon(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(Win32Error, match="找不到任务栏图标"):
+        set_window_app_identity(
+            1001,
+            "Glory.Codex.Boot",
+            tmp_path / "missing.ico",
+        )
 
 
 def test_monitor_geometry_uses_win32_work_areas(

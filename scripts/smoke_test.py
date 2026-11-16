@@ -84,6 +84,7 @@ def check_package() -> None:
         ("media", "wallpaper.jpg"),
         ("assets", "app-icon.png"),
         ("assets", "app-icon.ico"),
+        ("assets", "taskbar-icon.ico"),
         ("config", "launcher.example.json"),
         ("LICENSE",),
         ("THIRD_PARTY_NOTICES.md",),

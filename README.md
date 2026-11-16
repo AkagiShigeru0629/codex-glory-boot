@@ -49,6 +49,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 - 如果应用内壁纸出现异常，按 `Ctrl+Alt+Shift+R` 可恢复 Codex 原生外观。
 - 壁纸注入失败不会阻止 Codex 正常启动和使用。
 
+### 替换动画任务栏图标
+
+动画启动期间的任务栏图标位于发布目录：
+
+```text
+assets\taskbar-icon.ico
+```
+
+可以直接用同名 `.ico` 文件替换，无需重新构建；下次从桌面入口启动时生效。源码运行时替换项目根目录下的 `assets\taskbar-icon.ico`。该文件只控制动画窗口的任务栏图标，不改变 EXE 或桌面快捷方式图标。
+
 ## 卸载
 
 恢复或删除由安装脚本创建的桌面快捷方式：

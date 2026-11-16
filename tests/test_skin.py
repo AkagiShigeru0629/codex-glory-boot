@@ -110,6 +110,7 @@ def _skin_controller(
     payload_calls: list[tuple[Path, str]] | None = None,
     process_paths: dict[int, str] | None = None,
     timeout_ms: int = 1000,
+    capability_wait_ms: int = 100,
 ) -> tuple[SkinController, FakeCdp]:
     cdp_client = cdp or FakeCdp()
 
@@ -149,7 +150,7 @@ def _skin_controller(
         timeout_ms=timeout_ms,
         connect_timeout_ms=20,
         evaluate_timeout_ms=20,
-        capability_wait_ms=100,
+        capability_wait_ms=capability_wait_ms,
     )
     return controller, cdp_client
 
@@ -687,10 +688,19 @@ def test_capability_waits_for_late_page_mount(
     tmp_path: Path,
 ) -> None:
     cdp = VeryLateCapabilityCdp()
-    controller, _cdp = _skin_controller(tmp_path, cdp=cdp)
+    controller, _cdp = _skin_controller(
+        tmp_path,
+        cdp=cdp,
+        capability_wait_ms=1000,
+    )
 
     controller.start(launched_pid=10)
-    _wait_for_state(qapp, controller, SkinState.INSTALLED)
+    _wait_for_state(
+        qapp,
+        controller,
+        SkinState.INSTALLED,
+        timeout_ms=1000,
+    )
 
     assert [call[1] for call in cdp.evaluation_calls] == [1] * 9 + [2, 3]
     controller.close()
